@@ -10,7 +10,14 @@ import {
 import { SessionStore, type GameSession, type PlayerRecord } from '../session/store.js';
 import { getCharacterById } from '@clocktower/shared';
 import { buildFlowState } from './flow.js';
-import { openNight, resolveNight, submitNightChoice, buildNightOrder } from './nightEngine.js';
+import {
+  buildNightOrder,
+  firstPlayerOwingAChoice,
+  markPassedAutoSteps,
+  openNight,
+  resolveNight,
+  submitNightChoice,
+} from './nightEngine.js';
 
 function setCharacter(player: PlayerRecord, characterId: string): void {
   const def = getCharacterById(characterId);
@@ -175,9 +182,89 @@ describe('buildFlowState — day', () => {
     expect(flow.announcement).toContain('Player3');
     expect(flow.announcement).toContain('Voting is open');
   });
+  it('announces EVERY waker, including characters with no night choice', () => {
+    // The official Glossary defines a wake as a player opening their eyes, and
+    // the whole table hears it. "The Chef woke" is usable public information — it
+    // tells you the Chef is alive — so announcing only the pickers silently
+    // swallowed real information. The Chef and Empath are woken, given a number
+    // and put back to sleep exactly like everyone else.
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'chef'); // 4 on night one, no pick
+    setCharacter(players[1]!, 'imp');
+    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[3]!, 'empath'); // 5 on night one, no pick
+    setCharacter(players[4]!, 'recluse');
+    session.phase = 'night';
+    session.nightNumber = 0;
+    openNight(session);
+    session.currentNight!.briefed = true;
+
+    expect(buildFlowState(session).announcement).toBe('Player0, wake up.');
+
+    // Passing the Chef records that the wake-up happened, so the walk moves to
+    // the Empath (order 5) — the next waker — rather than skipping to the next
+    // player who happens to make a choice.
+    session.currentNight!.activeIndex = 1;
+    markPassedAutoSteps(session);
+    expect(buildFlowState(session).announcement).toBe('Player3, wake up.');
+    session.currentNight!.activeIndex = 2;
+    markPassedAutoSteps(session);
+    expect(buildFlowState(session).announcement).toBe('Player2, wake up.');
+  });
+
+  it('still prompts only the players who actually have a choice to make', () => {
+    // The announcement covers everyone; the private picker does not. An
+    // auto-resolving character has nothing to submit, so prompting them would
+    // show a picker with nothing in it — their answer arrives at dawn.
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'chef');
+    setCharacter(players[1]!, 'imp');
+    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[3]!, 'empath');
+    setCharacter(players[4]!, 'recluse');
+    session.phase = 'night';
+    session.nightNumber = 0;
+    openNight(session);
+    session.currentNight!.briefed = true;
+    session.currentNight!.activeIndex = 1;
+    markPassedAutoSteps(session);
+
+    const flow = buildFlowState(session);
+    // The Empath is the announced waker (first-night order 5, no pick), while the
+    // Poisoner is the one who owes a choice (order 8). Two different people, two
+    // different jobs, and the announcement must not imply they are the same.
+    expect(flow.activePlayerId).toBe(players[3]!.playerId);
+    expect(flow.activePlayerName).toBe('Player3');
+    expect(flow.needsChoiceFromPlayerId).toBe(players[2]!.playerId);
+    expect(firstPlayerOwingAChoice(session)?.playerId).toBe(players[2]!.playerId);
+  });
+
+  it('is ready to resolve only once every waker has been dealt with', () => {
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'chef');
+    setCharacter(players[1]!, 'imp');
+    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[3]!, 'empath');
+    setCharacter(players[4]!, 'recluse');
+    session.phase = 'night';
+    session.nightNumber = 0;
+    openNight(session);
+    session.currentNight!.briefed = true;
+
+    // Every step walked past, and the Poisoner submitted.
+    session.currentNight!.activeIndex = session.currentNight!.steps.length;
+    markPassedAutoSteps(session);
+    expect(buildFlowState(session).readyToResolve).toBe(false);
+    submitNightChoice(session, players[2]!.playerId, [players[4]!.playerId]);
+    submitNightChoice(session, players[1]!.playerId, [players[4]!.playerId]);
+    expect(buildFlowState(session).readyToResolve).toBe(true);
+  });
 });
 
-// The single most important test in this file.
+// The two audio channels, and the one leak that matters. See the wake-by-name
+// rule: the official Storyteller Advice says to "refer to the name of the player,
+// not their character", so `announcement` carries display names and never a
+// character name. `assertSpeakableAnnouncement` is the enforcement.
 describe('the flow announcement never leaks', () => {
   it('holds for every announcement across a whole generated night', () => {
     const store = new SessionStore();

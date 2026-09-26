@@ -1,7 +1,7 @@
 import type { Server as SocketIOServer } from 'socket.io';
 import { ServerEvents, type FlowState } from '@clocktower/shared';
 import type { GameSession } from '../session/store.js';
-import { buildNightOrder, firstPlayerOwingAChoice } from './nightEngine.js';
+import { buildNightOrder, markPassedAutoSteps } from './nightEngine.js';
 import { sendToStoryteller } from './broadcast.js';
 
 /**
@@ -113,9 +113,21 @@ function buildNightFlow(session: GameSession, base: FlowBase): FlowState {
   }
 
   const order = buildNightOrder(session);
+  // EVERY waker, not just the ones who make a choice.
+  //
+  // The official Glossary defines a wake as a player opening their eyes, and the
+  // whole table hears their name called. That makes "who woke tonight" usable
+  // public information — a Chef who woke is a Chef who is alive — so announcing
+  // only the pickers silently swallowed real information. The Chef and the
+  // Empath are woken, given a number and put back to sleep exactly like anyone
+  // else, and the table is entitled to hear it.
+  //
+  // A step counts as not-yet-announced until it is resolved. Auto-resolving steps
+  // are marked resolved as the Storyteller's cursor walks past them, since there
+  // is nothing for their player to do (see markPassedAutoSteps).
   const pending = order.filter((step) => {
     const stored = night.steps.find((s) => s.wakerPlayerId === step.wakerPlayerId && s.characterId === step.characterId);
-    return (step.targetCount ?? 0) > 0 && stored && !stored.resolved;
+    return stored && !stored.resolved;
   });
 
   // The Storyteller's cursor decides who is "up" — that is the person they are
@@ -124,20 +136,21 @@ function buildNightFlow(session: GameSession, base: FlowBase): FlowState {
   const cursorStep = order[cursorIndex];
   const cursorWaker = cursorStep ? session.players.get(cursorStep.wakerPlayerId) : undefined;
 
-  // Who still owes a choice. When the cursor is already on an unresolved picker,
-  // that player is the one to announce.
-  // Prefer the person under the Storyteller's cursor when they still owe a
-  // choice, so clicking "next" wakes who they clicked on; otherwise fall back to
-  // whoever is first in the official order. Either way it is the same
-  // computation `sendActiveNightPrompt` uses, so the spoken name and the person
-  // holding a prompt on their screen can never be two different people.
-  const cursorOwes =
+  // The person to ANNOUNCE is the first waker in official order who has not been
+  // dealt with yet, preferring whoever the cursor is on so clicking "next" wakes
+  // who the Storyteller clicked on.
+  const pickers = pending.filter((s) => (s.targetCount ?? 0) > 0);
+  const nextWaker =
     cursorStep && pending.some((s) => s.wakerPlayerId === cursorStep.wakerPlayerId && s.characterId === cursorStep.characterId)
       ? cursorStep
-      : null;
-  const owedWaker = cursorOwes
-    ? (session.players.get(cursorOwes.wakerPlayerId) ?? null)
-    : firstPlayerOwingAChoice(session);
+      : pending[0];
+  const nextWakerPlayer = nextWaker ? session.players.get(nextWaker.wakerPlayerId) : undefined;
+
+  // Who needs a private prompt: only the pickers. An auto-resolving character has
+  // no choice to submit, so prompting them would show a picker with nothing to
+  // pick — their answer arrives at dawn, when the engine resolves the night.
+  const owed = pickers[0];
+  const owedWaker = owed ? session.players.get(owed.wakerPlayerId) : undefined;
 
   const resolvedCount = night.steps.filter((s) => s.resolved).length;
 
@@ -169,18 +182,22 @@ function buildNightFlow(session: GameSession, base: FlowBase): FlowState {
     // The spoken line names a person. Naming somebody is public in this game —
     // the real table shouts "Bram, wake up" — while their ROLE is not, and the
     // role is not in this string.
-    announcement: owedWaker
-      ? `${owedWaker.displayName}, wake up.`
+    // The spoken line names a person. Naming somebody is public in this game —
+    // the real table shouts "Bram, wake up" — while their ROLE is not, and the
+    // role is not in this string. See the leak guard in shared/protocol/flow.ts.
+    announcement: nextWakerPlayer
+      ? `${nextWakerPlayer.displayName}, wake up.`
       : cursorWaker
         ? `${cursorWaker.displayName}, close your eyes.`
         : 'Everyone, close your eyes.',
-    activePlayerId: cursorWaker?.playerId ?? null,
-    activePlayerName: cursorWaker?.displayName ?? null,
+    activePlayerId: nextWakerPlayer?.playerId ?? cursorWaker?.playerId ?? null,
+    activePlayerName: nextWakerPlayer?.displayName ?? cursorWaker?.displayName ?? null,
     needsChoiceFromPlayerId: owedWaker?.playerId ?? null,
     needsChoiceFromName: owedWaker?.displayName ?? null,
     stepNumber: cursorIndex + 1,
     totalSteps: order.length,
     resolvedCount,
+    // Everything dealt with: every picker has submitted and every auto waker has been passed.
     readyToResolve: pending.length === 0,
     executedPlayerName: null,
   };

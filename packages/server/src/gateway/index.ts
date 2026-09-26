@@ -39,6 +39,7 @@ import { checkMayorWin, checkSaintExecution, checkWinCondition, endGame, tryScar
 import { broadcastFlow, buildFlowState } from '../game/flow.js';
 import {
   endNight,
+  markPassedAutoSteps,
   openNight,
   resolveNight,
   sendNightLog,
@@ -433,6 +434,11 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         else if (action === 'goto' && stepIndex !== undefined) night.activeIndex = stepIndex;
         const last = Math.max(0, night.steps.length - 1);
         night.activeIndex = Math.max(0, Math.min(night.activeIndex, last));
+        // Characters with no night pick (Chef, Empath, Undertaker, Spy) still
+        // wake and are still called by name — the table is entitled to hear it,
+        // because "the Chef woke" is information that the Chef is alive. Marking
+        // them as the cursor passes is what lets the wake walk reach everyone.
+        markPassedAutoSteps(session);
         // Opening a night has to actually wake people: the prompt is the whole
         // point of the engine, so stepping into a night sends it here too rather
         // than only on the phase change.

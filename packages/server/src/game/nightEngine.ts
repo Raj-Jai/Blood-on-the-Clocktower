@@ -879,6 +879,50 @@ export function sendActiveNightPrompt(io: SocketIOServer, session: GameSession):
 }
 
 /**
+ * Announces every remaining waker, in official order, and returns how many were
+ * announced. Used by the wake walk so an auto-resolving character is still called
+ * by name even though they are never prompted.
+ */
+export function pendingWakerNames(session: GameSession): string[] {
+  const night = session.currentNight;
+  if (!night) return [];
+  const names: string[] = [];
+  for (const step of buildNightOrder(session)) {
+    const stored = findStoredStep(night, step);
+    if (!stored || stored.resolved) continue;
+    const player = session.players.get(step.wakerPlayerId);
+    if (player) names.push(player.displayName);
+  }
+  return names;
+}
+
+/**
+ * Marks auto-resolving steps the Storyteller's cursor has walked past as dealt
+ * with.
+ *
+ * A character with no night pick — the Chef, the Empath, the Undertaker, the Spy —
+ * still wakes: their name is called, they are given their information, and they
+ * go back to sleep. There is nothing for them to submit, so the step stays open
+ * forever and the wake walk can never reach the people after them. Marking them
+ * as the cursor passes is what lets the flow announce EVERY waker in the official
+ * order rather than only the ones who make a choice.
+ *
+ * Their actual information is still delivered by `resolveNight` at dawn, which is
+ * when the engine applies the night. This only records that the wake-up happened.
+ */
+export function markPassedAutoSteps(session: GameSession): void {
+  const night = session.currentNight;
+  if (!night) return;
+  const order = buildNightOrder(session);
+  for (let i = 0; i < night.activeIndex && i < order.length; i++) {
+    const step = order[i]!;
+    if ((step.targetCount ?? 0) > 0) continue;
+    const stored = findStoredStep(night, step);
+    if (stored && !stored.resolved) stored.resolved = true;
+  }
+}
+
+/**
  * The first player, in official order, who still owes a choice. This is the same
  * computation the flow uses to decide who the Storyteller should wake, so the
  * prompt and the spoken line can never disagree about who is up.
