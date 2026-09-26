@@ -13,6 +13,7 @@ import {
   currentWaker,
   endNight,
   finishWake,
+  wakerIsFinished,
   firstPlayerOwingAChoice,
   openNight,
   pendingStepsForPlayer,
@@ -364,6 +365,79 @@ describe('deferred night steps', () => {
     }
     expect(toNightOrderUpdate(session).outstandingCharacterIds).toEqual([]);
     expect(session.currentNight!.resolved).toBe(true);
+  });
+
+  it('walks past an unmakeable character that has a target count', () => {
+    // REGRESSION, found by playing a real 5-player game: the night deadlocked on
+    // the first beat. With no Outsiders in play the Librarian learns that instead
+    // of choosing, and with no Minions the Investigator learns that instead — both
+    // steps are UNMAKEABLE but still carry a target count of 1.
+    //
+    // The wake walk's "may I move past this player?" guard used to read "target
+    // count is 0, or they already picked". For those two steps both halves were
+    // false, so finishWake never ran. Nothing was waiting on the player, so nobody
+    // was ever prompted, and the Storyteller was told to keep saying that player's
+    // name with no control anywhere that would move the night on.
+    const { session, players } = makeSession(5);
+    // No Outsiders and no Minions, which is what makes both learn-in characters
+    // unmakeable: the Librarian learns "there are no Outsiders" and the Investigator
+    // "there are no Minions". A 5-player game can draw exactly this.
+    setCharacter(players[0]!, 'librarian');
+    setCharacter(players[1]!, 'investigator');
+    setCharacter(players[2]!, 'chef');
+    setCharacter(players[3]!, 'empath');
+    setCharacter(players[4]!, 'imp');
+    session.phase = 'night';
+    openNight(session);
+    session.currentNight!.briefed = true;
+
+    // Both learn-in characters really are unmakeable AND really do have a target
+    // count, which is the combination that used to jam.
+    const order = buildNightOrder(session);
+    for (const id of ['librarian', 'investigator']) {
+      const step = order.find((s) => s.characterId === id);
+      expect(step, `${id} should be in the first night order`).toBeDefined();
+      expect(step!.isPossible, `${id} should be unmakeable here`).toBe(false);
+      expect(step!.targetCount, `${id} should still carry a target count`).toBeGreaterThan(0);
+    }
+
+    // Nobody is waiting on the Librarian, so the walk must be able to move on.
+    expect(wakerIsFinished(session, players[0]!.playerId)).toBe(true);
+    // And the Storyteller is NOT told to wait on them.
+    expect(toNightOrderUpdate(session).outstandingCharacterIds).not.toContain('Librarian');
+    expect(toNightOrderUpdate(session).outstandingCharacterIds).not.toContain('Investigator');
+
+    // The real test: walking the night gets past both and reaches the pickers.
+    const walked: string[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      const flow = buildFlowState(session);
+      walked.push(flow.announcement ?? '');
+      if (flow.readyToResolve) break;
+      if (flow.needsChoiceFromPlayerId) {
+        const p = session.players.get(flow.needsChoiceFromPlayerId);
+        const step = buildNightOrder(session).find((s) => s.wakerPlayerId === p!.playerId);
+        const victim = step?.legalTargetIds?.[0];
+        if (victim) {
+          submitNightChoice(session, p!.playerId, [victim]);
+          finishWake(session, p!.playerId);
+          // Stand in for the pause expiring, which is what advances the walk in
+          // real time. Without it the walk correctly refuses to move on.
+          skipWakeGate(session);
+          continue;
+        }
+      }
+      const awake = currentWaker(session);
+      expect(awake, `beat ${i}: there should always be a waker, or the walk is done`).not.toBeNull();
+      expect(wakerIsFinished(session, awake!.playerId), `beat ${i}: ${awake!.displayName} should be passable`).toBe(true);
+      finishWake(session, awake!.playerId);
+      skipWakeGate(session);
+    }
+
+    // Both unmakeable characters were announced on their way past, and the walk
+    // ended up at a character who can actually act.
+    expect(walked.some((a) => a.startsWith(players[0]!.displayName))).toBe(true);
+    expect(walked.some((a) => a.startsWith(players[1]!.displayName))).toBe(true);
+    expect(buildFlowState(session).readyToResolve || buildFlowState(session).needsChoiceFromName).toBeTruthy();
   });
 
   it('still refuses a late submission from a character that is not deferred', () => {
@@ -1103,6 +1177,81 @@ describe('night engine over a real socket', () => {
     stSocket.disconnect();
     for (const s of playerSockets) s.disconnect();
   }
+
+  it('the wake walk advances past an unmakeable character over a real socket', { timeout: 20000 }, async () => {
+    // REGRESSION, and the layer where the bug actually lived.
+    //
+    // Playing a real 5-player game deadlocked on the very first beat. With no
+    // Outsiders in play the Librarian learns that instead of choosing, and with no
+    // Minions the Investigator learns that instead — both steps are unmakeable but
+    // still carry a target count of 1.
+    //
+    // The Storyteller's "next" click asked a question that had been spelled out
+    // separately from the rest of the engine ("target count is 0, or they already
+    // picked"). Both halves were false for those steps, so finishWake never ran:
+    // the walk never advanced, nobody was ever prompted, and the Storyteller was
+    // told to keep announcing a player who could not act. The unit test for
+    // wakerIsFinished passes against this bug, so the only honest place to pin it
+    // is the socket the click actually arrives on.
+    const { session, stSocket, playerSockets } = await setUpGame();
+    // NOT via Start Distribution: that deals a RANDOM roster, and openNight returns
+    // the existing night rather than rebuilding it, so characters written after
+    // distribution would have no stored step and the walk would be testing the
+    // wrong thing. Setting the roster and letting the first "next" open the night
+    // keeps the whole thing on the real gateway handler, which is where the bug was.
+    const players = [...session.players.values()].sort((a, b) => a.seatIndex - b.seatIndex);
+    setCharacter(players[0]!, 'librarian');
+    setCharacter(players[1]!, 'investigator');
+    setCharacter(players[2]!, 'chef');
+    setCharacter(players[3]!, 'empath');
+    setCharacter(players[4]!, 'imp');
+    session.phase = 'night';
+
+    const openP = waitFor<any>(stSocket, ServerEvents.NightOrderUpdate);
+    stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' });
+    await openP;
+    // "Everyone, close your eyes" is what the Storyteller says before any waker.
+    session.currentNight!.briefed = true;
+
+    // The condition that used to jam, asserted rather than assumed.
+    const order = buildNightOrder(session);
+    for (const id of ['librarian', 'investigator']) {
+      const step = order.find((s) => s.characterId === id);
+      expect(step, `${id} should be woken on the first night`).toBeDefined();
+      expect(step!.isPossible, `${id} should be unmakeable with no Outsiders/Minions`).toBe(false);
+      expect(step!.targetCount, `${id} should still carry a target count`).toBeGreaterThan(0);
+    }
+
+    // Click "next" the way a Storyteller does, and require the announcement to
+    // actually change. The old code let this sit on one name forever.
+    const said: string[] = [buildFlowState(session).announcement ?? ''];
+    for (let i = 0; i < 8; i += 1) {
+      const flowP = waitForUpTo<any>(stSocket, ServerEvents.FlowUpdate, 500);
+      stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' });
+      const next = await flowP;
+      if (!next) break;
+      if (next.announcement !== said[said.length - 1]) said.push(next.announcement);
+      // The pause between wakers is what stops the table timing the order; skip it
+      // so the walk is exercised rather than the clock.
+      const skipP = waitForUpTo<any>(stSocket, ServerEvents.FlowUpdate, 400);
+      stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'skipDelay' });
+      await skipP;
+    }
+
+    // Every player due a wake-up was announced, including both learn-in
+    // characters, and we got as far as somebody who can actually act.
+    for (const who of [players[0]!, players[1]!, players[4]!]) {
+      expect(
+        said.some((a) => a.startsWith(who.displayName)),
+        `${who.displayName} was never announced. Sequence: ${JSON.stringify(said)}`
+      ).toBe(true);
+    }
+
+    // The Imp is the only picker, so the night waits on them and nobody else.
+    expect(toNightOrderUpdate(session).outstandingCharacterIds).toEqual(['Imp']);
+
+    teardown(stSocket, playerSockets);
+  });
 
   it('a waking player receives a private prompt and submits their choice in-app', async () => {
     const { session, stSocket, playerSockets, tokens } = await setUpGame();

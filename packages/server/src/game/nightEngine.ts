@@ -1053,11 +1053,10 @@ export function currentWakeStep(session: GameSession): NightStep | null {
   if (stored?.resolved) {
     // Everything at or before the cursor is dealt with; the next unresolved step
     // is the one who is awake. This keeps the walk self-healing after a
-    // Storyteller jump, rather than stalling on an already-resolved step.
-    const next = order.find((s) => {
-      const st = findStoredStep(night, s);
-      return st && !st.resolved;
-    });
+    // Storyteller jump, rather than stalling on an already-resolved step. A step
+    // with no stored record is treated as unresolved for the same reason as in
+    // advanceWakeCursor: skipping it would drop a waker without ever being told.
+    const next = order.find((s) => !findStoredStep(night, s)?.resolved);
     return next ?? null;
   }
   return step;
@@ -1132,12 +1131,14 @@ export function advanceWakeCursor(session: GameSession): void {
   // the next name on the wire before the gap had elapsed.
   if (wakeGateIsPending(session)) return;
   const order = buildNightOrder(session);
-  const next = order.findIndex((s) => {
-    const stored = findStoredStep(night, s);
-    return stored && !stored.resolved;
-  });
-  night.wakeIndex = next === -1 ? Math.max(0, order.length - 1) : next;
-  if (next === -1) night.wakeIndex = order.length;
+  // A step with NO stored record counts as not-yet-dealt-with, not as dealt with.
+  // The old `stored && !stored.resolved` read a missing record as "resolved" and
+  // walked straight past it, which would put the cursor at the far end of the
+  // night and drop whoever was in the middle. openNight and appendRavenkeeperWake
+  // both create the record, so this is hardening rather than a live bug — but a
+  // silent skip is the worst possible failure mode here, so it fails safe.
+  const next = order.findIndex((s) => !findStoredStep(night, s)?.resolved);
+  night.wakeIndex = next === -1 ? order.length : next;
 }
 
 /** Closes the pause immediately. The Storyteller's "skip the wait" control. */
@@ -1226,6 +1227,24 @@ export function recomputeNightResolved(session: GameSession): boolean {
   if (!night) return false;
   night.resolved = isNightFinished(session);
   return night.resolved;
+}
+
+/**
+ * True when the Storyteller may move the wake walk past this player.
+ *
+ * "May move past" is the same statement as "nothing is waiting on this player", so
+ * it goes through stepCountsAsOutstanding rather than being spelled out again at
+ * the call site. When the two were written separately the walk deadlocked: the
+ * guard read "targetCount is 0 or they already picked", which is false for an
+ * UNMAKEABLE step that has a target count — a Librarian with no Outsiders in play,
+ * an Investigator with no Minions. Nothing was waiting on that player, nobody was
+ * prompted, and the night sat announcing their name at somebody who could not act
+ * with no button that would move it on.
+ */
+export function wakerIsFinished(session: GameSession, playerId: string): boolean {
+  const step = buildNightOrder(session).find((s) => s.wakerPlayerId === playerId);
+  if (!step) return true;
+  return !stepCountsAsOutstanding(session, step);
 }
 
 export function toNightOrderStepView(session: GameSession, step: NightStep): NightOrderStepView {

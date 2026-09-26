@@ -49,6 +49,7 @@ import {
   sendNightLog,
   sendNightOrder,
   skipWakeGate,
+  wakerIsFinished,
   submitNightChoice,
   wakeGateIsPending,
 } from '../game/nightEngine.js';
@@ -462,12 +463,11 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
             // step, which is the same class of bug as skipping an auto-resolving
             // character. A table that needs to move on resolves the night instead,
             // which reports the missing choice rather than hiding it.
-            const step = buildNightOrder(session).find((x) => x.wakerPlayerId === awake?.playerId);
-            const stored = step
-              ? night.steps.find((x) => x.wakerPlayerId === step.wakerPlayerId && x.characterId === step.characterId)
-              : undefined;
-            const finished = (step?.targetCount ?? 0) === 0 || (stored?.targetIds.length ?? 0) > 0;
-            if (awake && finished) {
+            // "Finished" is exactly "nothing is waiting on this player". The rule
+            // lives in the engine (wakerIsFinished) rather than being re-derived
+            // here, because a second, subtly different copy of it is what deadlocked
+            // the walk on unmakeable steps like a Librarian with no Outsiders.
+            if (awake && wakerIsFinished(session, awake.playerId)) {
               finishWake(session, awake.playerId);
               // Keep the stepper in step with the wake walk for the panel's benefit.
               night.activeIndex = night.wakeIndex;
