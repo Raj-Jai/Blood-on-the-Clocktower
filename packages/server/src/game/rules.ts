@@ -3,6 +3,8 @@ import type { ActiveNominationView } from '@clocktower/shared';
 import type { ActiveNomination, GameSession } from '../session/store.js';
 import { livingPlayerCount } from '../session/store.js';
 import { Errors } from '../errors.js';
+import { slayerWouldKill, virginTriggersExecution } from './abilities.js';
+import { checkSaintExecution } from './winConditions.js';
 
 export function nominate(session: GameSession, nominatorId: string, targetId: string): ActiveNomination {
   const nominator = session.players.get(nominatorId);
@@ -43,6 +45,18 @@ export function castVote(session: GameSession, nominationId: string, playerId: s
     if (voting) {
       // Using the ghost vote is consumed the moment it's cast, regardless of later retraction.
       voter.usedDeadVote = true;
+    }
+  }
+
+  // Butler: "tomorrow, you may only vote if they are voting too." A poisoned or
+  // drunk Butler's ability does not function, so the restriction does not apply.
+  if (voting && !voter.statusEffects.poisoned && !voter.statusEffects.drunk) {
+    const choice = voter.butlerChoice;
+    if (choice && choice.forDayNumber === session.dayNumber) {
+      const master = session.players.get(choice.masterPlayerId);
+      if (master && nomination.votes.get(choice.masterPlayerId) !== true) {
+        throw Errors.butlerMustFollow();
+      }
     }
   }
 
@@ -96,6 +110,8 @@ export function closeVote(session: GameSession, nominationId: string): ActiveNom
 export interface ExecutionResult {
   targetPlayerId: string;
   wasDemon: boolean;
+  /** True when the executed player is a functioning Saint, so Evil wins immediately. */
+  wasSaint: boolean;
 }
 
 export function confirmExecution(session: GameSession, nominationId: string): ExecutionResult {
@@ -107,10 +123,23 @@ export function confirmExecution(session: GameSession, nominationId: string): Ex
   const target = session.players.get(nomination.targetId);
   if (!target) throw Errors.playerNotFound();
   const wasDemon = target.characterType === 'demon';
+  // The Saint's trigger is read BEFORE the death is applied, so the caller can
+  // end the game on the strength of the execution itself.
+  const wasSaint = checkSaintExecution(session, target.playerId) !== null;
   target.alive = false;
   // Remove from the qualifying list so a later tie in the same day can't reference a resolved execution twice.
   session.resolvedNominationsToday = session.resolvedNominationsToday.filter((r) => r.targetId !== nomination.targetId);
-  return { targetPlayerId: target.playerId, wasDemon };
+  return { targetPlayerId: target.playerId, wasDemon, wasSaint };
+}
+
+/** The Saint: "The 1st time you are nominated, if the nominator is a Townsfolk, they are executed immediately." */
+export function virginTrigger(session: GameSession, nomination: ActiveNomination): string | null {
+  return virginTriggersExecution(session, nomination.targetId, nomination.nominatorId);
+}
+
+/** The Slayer: "if they are the Demon, they die." */
+export function slayerTarget(session: GameSession, slayerId: string, targetId: string): boolean {
+  return slayerWouldKill(session, slayerId, targetId);
 }
 
 /** Called when transitioning into the day phase: resets per-day nomination usage, preserves lifetime dead-vote usage. */

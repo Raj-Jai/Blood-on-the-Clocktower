@@ -16,6 +16,10 @@ function makeEntry(overrides: Partial<GrimoirePlayerEntry>): GrimoirePlayerEntry
     seatIndex: overrides.seatIndex ?? 0,
     livingLeftNeighborId: overrides.livingLeftNeighborId ?? null,
     livingRightNeighborId: overrides.livingRightNeighborId ?? null,
+    registration: overrides.registration ?? { alignment: null, characterType: null },
+    drunkCoverCharacterId: overrides.drunkCoverCharacterId ?? null,
+    fortuneTellerRedHerringPlayerId: overrides.fortuneTellerRedHerringPlayerId ?? null,
+    butlerChoice: overrides.butlerChoice ?? null,
   };
 }
 

@@ -1,6 +1,7 @@
 import type { Server as SocketIOServer, Socket } from 'socket.io';
 import { ZodError } from 'zod';
 import {
+  AdvanceNightSchema,
   AnswerQuestionSchema,
   AskQuestionSchema,
   AuthPayloadSchema,
@@ -14,34 +15,37 @@ import {
   ServerEvents,
   ClientEvents,
   ReorderSeatsSchema,
+  SetDiscretionSchema,
   SetPhaseSchema,
   SetPlayerAlignmentSchema,
   SetPlayerStatusSchema,
   SetTimerSchema,
   ShareAbilityResultSchema,
+  SubmitNightChoiceSchema,
   VoteSchema,
   MIN_PLAYERS,
+  charactersByType,
   type GameEndReason,
   type QuestionEntryView,
   type WinningTeam,
 } from '@clocktower/shared';
 import type { SessionStore, GameSession, PlayerRecord, QuestionEntry } from '../session/store.js';
-import { reorderSeats } from '../session/store.js';
+import { logNightEvent, reorderSeats } from '../session/store.js';
 import { syncEvilRoomMembership, sendEvilHistoryTo, sendEvilMessage, sendOpenHistoryTo, sendOpenMessage } from '../game/chat.js';
 import { distributeRoles, resetDistribution, buildPlayerDistributionPayload } from '../game/distribution.js';
 import { askQuestion, answerQuestion, resetQuestionQueue } from '../game/questions.js';
 import { resolveDemonKill } from '../game/demonKill.js';
-import { checkWinCondition, endGame, tryScarletWomanTakeover } from '../game/winConditions.js';
+import { checkMayorWin, checkSaintExecution, checkWinCondition, endGame, tryScarletWomanTakeover } from '../game/winConditions.js';
 import {
-  broadcastGrimoire,
-  broadcastLobby,
-  buildGrimoire,
-  sendError,
-  sendToPlayer,
-  sendToStoryteller,
-  sessionRoom,
-  STORYTELLER_SOCKET_KEY,
-} from '../game/broadcast.js';
+  endNight,
+  openNight,
+  resolveNight,
+  sendNightLog,
+  sendNightOrder,
+  sendNightPrompts,
+  submitNightChoice,
+} from '../game/nightEngine.js';
+import { broadcastGrimoire, broadcastLobby, buildGrimoire, sendError, sendToPlayer, sendToStoryteller, sessionRoom, STORYTELLER_SOCKET_KEY } from '../game/broadcast.js';
 import { castVote, closeVote, confirmExecution, nominate, resetForNewDay, toNominationView } from '../game/rules.js';
 import { ClocktowerError, Errors } from '../errors.js';
 import { resolveAndBind, type AuthenticatedIdentity } from './socketAuth.js';
@@ -99,8 +103,35 @@ function broadcastPhaseChanged(io: SocketIOServer, session: GameSession): void {
   io.to(sessionRoom(session.code)).emit(ServerEvents.GamePhaseChanged, {
     phase: session.phase,
     dayNumber: session.dayNumber,
+    nightNumber: session.nightNumber,
     phaseEndsAt: session.phaseEndsAt,
   });
+}
+
+/** Storyteller-only night state: the stepper projection and the audit log. */
+function sendNightState(io: SocketIOServer, session: GameSession): void {
+  sendNightOrder(io, session);
+  sendNightLog(io, session);
+}
+
+/**
+ * Clears every player's free-text ability result.
+ *
+ * The result is a per-player private string that used to be set once and then
+ * pinned forever: `useSession` merged it with `payload.abilityResult ?? s.abilityResult`,
+ * so Night 1's answer stayed on the Character tab for the rest of the game,
+ * indistinguishable from tonight's. On a shared screen that is a serious accidental
+ * leak, and it is cleared at both ends of the night now.
+ */
+function clearAbilityResults(io: SocketIOServer, session: GameSession): void {
+  for (const player of session.players.values()) {
+    sendToPlayer(io, player, ServerEvents.PlayerSelfUpdate, { abilityResult: null });
+  }
+}
+
+/** Every Storyteller override is logged too: a hidden state that is never audited is indistinguishable from gardening. */
+function logDiscretion(session: GameSession, detail: string): void {
+  logNightEvent(session, 'discretion', detail);
 }
 
 function toQuestionView(q: QuestionEntry): QuestionEntryView {
@@ -165,7 +196,7 @@ function handlePostDeath(
   session: GameSession,
   deadPlayerId: string,
   wasDemon: boolean,
-  deathReason: 'executed' | 'self-killed'
+  deathReason: 'executed' | 'night-kill' | 'self-killed'
 ): boolean {
   if (wasDemon) {
     const takeover = tryScarletWomanTakeover(session, deadPlayerId);
@@ -179,7 +210,7 @@ function handlePostDeath(
       );
       // A legitimate hand-off happened; there IS still a living Demon, so
       // do not run the "no Demon left" win check this round.
-      const evilWin = checkWinCondition(session, deathReason);
+      const evilWin = checkWinCondition(session, deathReason === 'executed' ? 'executed' : 'self-killed');
       if (evilWin && evilWin.winner === 'evil') {
         broadcastGameEnded(io, session, evilWin.winner, evilWin.reason);
         return true;
@@ -188,7 +219,7 @@ function handlePostDeath(
     }
   }
 
-  const result = checkWinCondition(session, deathReason);
+  const result = checkWinCondition(session, deathReason === 'executed' ? 'executed' : 'self-killed');
   if (result) {
     broadcastGameEnded(io, session, result.winner, result.reason);
     return true;
@@ -270,11 +301,20 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         if (session.phase !== 'lobby') throw Errors.distributionAlreadyDone();
         if (session.players.size < MIN_PLAYERS) throw Errors.belowMinPlayers(MIN_PLAYERS);
         distributeRoles(session);
-        session.phase = 'day';
-        session.dayNumber = 1;
+        // The game opens at NIGHT, not day. Every first-night-only character
+        // (Washerwoman, Librarian, Investigator, Chef, Drunk, Poisoner, Spy, and
+        // the Imp) has to be woken before the first discussion, or the setup is
+        // broken and half the script is unplayable. dayNumber stays 0 until the
+        // Storyteller ends the night, which is what makes the first day "Day 1".
+        session.dayNumber = 0;
+        session.nightNumber = 0;
+        session.phase = 'night';
         session.phaseEndsAt = null;
+        openNight(session);
         broadcastDistribution(io, session);
         broadcastPhaseChanged(io, session);
+        sendNightState(io, session);
+        sendNightPrompts(io, session);
         store.touch(session);
       })
     );
@@ -295,16 +335,182 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const session = requireStoryteller(socket);
         const { phase, timerSeconds } = SetPhaseSchema.parse(raw);
         if (session.phase !== 'day' && session.phase !== 'night') throw Errors.invalidPhaseTransition();
+        if (phase === session.phase) throw Errors.invalidPhaseTransition();
+
         if (phase === 'day') {
+          // Dawn. Close out the night first (protection expires, the night is
+          // logged), then reset the day-scoped state.
+          endNight(session);
           resetForNewDay(session);
           resetQuestionQueue(session);
-          session.dayNumber += 1;
+          // The first night runs BEFORE Day 1, so dayNumber is still 0 when the
+          // Storyteller ends it. Incrementing from 0 would label the first day
+          // "Day 2".
+          session.dayNumber = session.dayNumber === 0 ? 1 : session.dayNumber + 1;
+        } else {
+          // Dusk. Opens the night: increments the night number, expires yesterday's
+          // poison, re-arms the Soldier, and prompts every waker privately.
+          openNight(session);
         }
+
         session.phase = phase;
         session.phaseEndsAt = timerSeconds ? Date.now() + timerSeconds * 1000 : null;
         broadcastPhaseChanged(io, session);
         broadcastGrimoire(io, session);
         sendQuestionQueueUpdates(io, session);
+        sendNightState(io, session);
+        if (phase === 'night') {
+          sendNightPrompts(io, session);
+          // Waking players must not be left holding last night's private result.
+          clearAbilityResults(io, session);
+        }
+
+        // The Mayor's win is checked as the day starts, when "no execution has
+        // occurred today" is true by definition.
+        if (phase === 'day') {
+          const mayorWin = checkMayorWin(session);
+          if (mayorWin) {
+            broadcastGameEnded(io, session, mayorWin.winner, mayorWin.reason);
+            return;
+          }
+        }
+        store.touch(session);
+      })
+    );
+
+    socket.on(ClientEvents.StorytellerAdvanceNight, (raw: unknown) =>
+      guarded(io, socket, () => {
+        const session = requireStoryteller(socket);
+        const { action, stepIndex } = AdvanceNightSchema.parse(raw);
+        const night = openNight(session);
+        if (session.phase !== 'night') {
+          session.phase = 'night';
+          broadcastPhaseChanged(io, session);
+        }
+
+        if (action === 'resolve') {
+          const report = resolveNight(session, io);
+          // Everyone learns the result of the night, as a public event.
+          broadcastGrimoire(io, session);
+          broadcastLobby(io, session);
+          // Waking players must not still be holding last night's private result.
+          clearAbilityResults(io, session);
+          for (const deadId of report.killedPlayerIds) {
+            const dead = session.players.get(deadId);
+            if (dead) sendToPlayer(io, dead, ServerEvents.PlayerSelfUpdate, { alive: false });
+          }
+          if (report.inheritance) {
+            sendDemonInherited(
+              io,
+              session,
+              report.inheritance.previousDemonPlayerId,
+              report.inheritance.newDemonPlayerId,
+              report.inheritance.newDemonCharacterId
+            );
+          }
+          for (const deadId of report.killedPlayerIds) {
+            const dead = session.players.get(deadId);
+            if (!dead) continue;
+            // The Scarlet Woman only inherits when the Demon dies with NO Minion
+            // already promoted. When a hand-off already happened there is a living
+            // Demon, and letting a second one be created would be wrong.
+            const wasDemon = dead.characterType === 'demon' && report.inheritance === null;
+            handlePostDeath(io, session, deadId, wasDemon, report.inheritance ? 'self-killed' : 'night-kill');
+          }
+          sendNightState(io, session);
+          store.touch(session);
+          return;
+        }
+
+        if (action === 'next') night.activeIndex += 1;
+        else if (action === 'previous') night.activeIndex -= 1;
+        else if (action === 'goto' && stepIndex !== undefined) night.activeIndex = stepIndex;
+        const last = Math.max(0, night.steps.length - 1);
+        night.activeIndex = Math.max(0, Math.min(night.activeIndex, last));
+        // Opening a night has to actually wake people: the prompt is the whole
+        // point of the engine, so stepping into a night sends it here too rather
+        // than only on the phase change.
+        sendNightPrompts(io, session);
+        sendNightState(io, session);
+        store.touch(session);
+      })
+    );
+
+    socket.on(ClientEvents.PlayerSubmitNightChoice, (raw: unknown) =>
+      guarded(io, socket, () => {
+        const { session, player } = requirePlayer(socket);
+        requireGameNotEnded(session);
+        if (session.phase !== 'night') throw Errors.notNightPhase();
+        const { targetIds } = SubmitNightChoiceSchema.parse(raw);
+        // The waker identity is read from the step inside submitNightChoice, so a
+        // player cannot submit on someone else's behalf even if they try.
+        submitNightChoice(session, player.playerId, targetIds, io);
+        sendNightState(io, session);
+        store.touch(session);
+      })
+    );
+
+    socket.on(ClientEvents.StorytellerSetDiscretion, (raw: unknown) =>
+      guarded(io, socket, () => {
+        const session = requireStoryteller(socket);
+        const payload = SetDiscretionSchema.parse(raw);
+
+        if (payload.impHeirPlayerId !== undefined) {
+          const heir = session.players.get(payload.impHeirPlayerId);
+          if (!heir) throw Errors.playerNotFound();
+          session.impHeirChoice = { nightNumber: session.nightNumber, playerId: heir.playerId };
+          logDiscretion(session, `Imp self-kill heir set to ${heir.displayName} for Night ${session.nightNumber}.`);
+        }
+        if (payload.drunkCoverPlayerId !== undefined) {
+          const drunk = [...session.players.values()].find((p) => p.character === 'drunk');
+          if (!drunk) throw Errors.playerNotFound();
+          const pool = charactersByType('townsfolk');
+          const unused = pool.filter((c) => {
+            const inPlay = new Set([...session.players.values()].map((p) => p.character));
+            return !inPlay.has(c.id) || c.id === drunk.character;
+          });
+          const cover = unused[0] ?? pool[0]!;
+          drunk.drunkCoverCharacterId = cover.id;
+          logDiscretion(
+            session,
+            `${drunk.displayName}'s Drunk cover is now the ${cover.name}. (The cover is drawn from Townsfolk not in play.)`
+          );
+          // The Drunk's own client must be re-projected, or they keep the old cover.
+          sendToPlayer(io, drunk, ServerEvents.GameDistributed, buildPlayerDistributionPayload(session, drunk));
+        }
+        if (payload.redHerringPlayerId !== undefined) {
+          const herring = session.players.get(payload.redHerringPlayerId);
+          if (!herring) throw Errors.playerNotFound();
+          for (const player of session.players.values()) {
+            player.fortuneTellerRedHerringPlayerId = herring.playerId;
+          }
+          logDiscretion(session, `Fortune Teller red herring is now ${herring.displayName} for the current night.`);
+        }
+        for (const entry of payload.registrations ?? []) {
+          const player = session.players.get(entry.playerId);
+          if (!player) throw Errors.playerNotFound();
+          player.registration = {
+            alignment: entry.alignment ?? null,
+            characterType: entry.characterType ?? null,
+          };
+          logDiscretion(
+            session,
+            `${player.displayName} now registers as ${entry.alignment ?? 'themselves'} / ${
+              entry.characterType ?? 'their own type'
+            } to detection abilities.`
+          );
+        }
+        if (payload.stepOverride) {
+          const step = session.currentNight?.steps.find((s) => s.characterId === payload.stepOverride!.characterId);
+          if (!step) throw Errors.playerNotFound();
+          step.overrideText = payload.stepOverride.text;
+          logDiscretion(
+            session,
+            `Result override queued for ${step.characterId}: "${payload.stepOverride.text}".`
+          );
+        }
+        broadcastGrimoire(io, session);
+        sendNightState(io, session);
         store.touch(session);
       })
     );
@@ -415,6 +621,10 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const { nominationId } = CloseVoteSchema.parse(raw);
         const nomination = closeVote(session, nominationId);
         io.to(sessionRoom(session.code)).emit(ServerEvents.NominationClosed, toNominationView(nomination));
+        // A day that ends on a failed vote has had "no execution", which is one
+        // of the Mayor's three conditions.
+        const mayorWin = checkMayorWin(session);
+        if (mayorWin) broadcastGameEnded(io, session, mayorWin.winner, mayorWin.reason);
         store.touch(session);
       })
     );
@@ -428,6 +638,18 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         io.to(sessionRoom(session.code)).emit(ServerEvents.ExecutionConfirmed, { playerId: result.targetPlayerId });
         broadcastGrimoire(io, session);
         broadcastLobby(io, session);
+        // The Saint's own text: "If you die by execution, your team loses." This
+        // is checked before the generic death sweep, because it outranks every
+        // other condition — including the Demon's own death in the same vote,
+        // which cannot happen but would otherwise be evaluated first.
+        if (result.wasSaint) {
+          const saintWin = checkSaintExecution(session, result.targetPlayerId);
+          if (saintWin) {
+            broadcastGameEnded(io, session, saintWin.winner, saintWin.reason);
+            store.touch(session);
+            return;
+          }
+        }
         handlePostDeath(io, session, result.targetPlayerId, result.wasDemon, 'executed');
         store.touch(session);
       })
@@ -437,6 +659,10 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
       guarded(io, socket, () => {
         const session = requireStoryteller(socket);
         requireGameNotEnded(session);
+        // A night kill can only happen at night. Without this the button was
+        // live during discussion, which is both a rules violation and the reason
+        // `phaseEndsAt` being purely cosmetic went unnoticed for so long.
+        if (session.phase !== 'night') throw Errors.notNightPhase();
         const { targetPlayerId: killTargetId } = DemonKillSchema.parse(raw);
         // The Storyteller acts on the Demon's behalf, so find the (only)
         // living Demon rather than requiring a specific killer socket.
@@ -445,9 +671,11 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const killResult = resolveDemonKill(session, demon.playerId, killTargetId);
         broadcastGrimoire(io, session);
         broadcastLobby(io, session);
-        sendToPlayer(io, session.players.get(killResult.targetPlayerId)!, ServerEvents.PlayerSelfUpdate, {
-          alive: false,
-        });
+        if (killResult.killed) {
+          sendToPlayer(io, session.players.get(killResult.targetPlayerId)!, ServerEvents.PlayerSelfUpdate, {
+            alive: false,
+          });
+        }
         if (killResult.inheritance) {
           sendDemonInherited(
             io,
@@ -469,8 +697,12 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
             broadcastGameEnded(io, session, livingCountResult.winner, livingCountResult.reason);
           }
           store.touch(session);
+        } else if (killResult.killed) {
+          handlePostDeath(io, session, killResult.targetPlayerId, false, 'night-kill');
+          store.touch(session);
         } else {
-          handlePostDeath(io, session, killResult.targetPlayerId, true, 'self-killed');
+          // Protected: the target survives, so no win check runs. The night log
+          // already records the save.
           store.touch(session);
         }
       })

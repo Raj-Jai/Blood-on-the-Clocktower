@@ -58,4 +58,25 @@ export const Errors = {
     new ClocktowerError('QUESTION_NOT_ACTIVE', 'Answer questions in order — this one is not next in the queue.', 403),
   notTheDemon: () => new ClocktowerError('NOT_THE_DEMON', 'Only a living Demon can make a night kill.', 403),
   gameAlreadyEnded: () => new ClocktowerError('GAME_ALREADY_ENDED', 'This game has already ended.', 403),
+  notNightPhase: () =>
+    new ClocktowerError('NOT_NIGHT_PHASE', 'That only happens at night. Switch the game to the night phase first.', 403),
+  noOpenNight: () => new ClocktowerError('NO_OPEN_NIGHT', 'There is no night in progress.', 409),
+  nightAlreadyResolved: () => new ClocktowerError('NIGHT_ALREADY_RESOLVED', 'Tonight has already been resolved.', 409),
+  notYourNightStep: () =>
+    new ClocktowerError('NOT_YOUR_NIGHT_STEP', 'You have no night choice to make right now.', 403),
+  nightChoiceAlreadySubmitted: () =>
+    new ClocktowerError('NIGHT_CHOICE_ALREADY_SUBMITTED', "You've already sent your choice for tonight.", 403),
+  nothingToChoose: () => new ClocktowerError('NOTHING_TO_CHOOSE', "Your character doesn't make a choice tonight.", 400),
+  wrongTargetCount: (expected: number, got: number) =>
+    new ClocktowerError(
+      'WRONG_TARGET_COUNT',
+      expected === 1 ? 'Choose exactly 1 player.' : `Choose exactly ${expected} players (you chose ${got}).`,
+      422
+    ),
+  duplicateTarget: () => new ClocktowerError('DUPLICATE_TARGET', 'Choose a player only once.', 422),
+  illegalTarget: (name: string) =>
+    new ClocktowerError('ILLEGAL_TARGET', `${name} is not a legal choice for your character.`, 422),
+  playerNotInGame: () => new ClocktowerError('PLAYER_NOT_FOUND', "That player isn't in this game.", 404),
+  butlerMustFollow: () =>
+    new ClocktowerError('BUTLER_MUST_FOLLOW', "You're the Butler: you may only vote if the player you chose is voting too.", 403),
 };

@@ -30,7 +30,10 @@ describe('resolveDemonKill', () => {
 
     const result = resolveDemonKill(session, demon.playerId, victim.playerId);
 
-    expect(result).toEqual({ targetPlayerId: victim.playerId, inheritance: null });
+    // `killed` is new: the caller needs to know whether protection stopped the
+    // kill, because the rest of the death chain (win checks, the dead player's
+    // own screen) must not run for a save.
+    expect(result).toEqual({ targetPlayerId: victim.playerId, inheritance: null, killed: true });
     expect(victim.alive).toBe(false);
     expect(demon.alive).toBe(true);
     // The killer's own character is untouched by a kill of someone else.
@@ -100,7 +103,7 @@ describe('resolveDemonKill', () => {
 
     const result = resolveDemonKill(session, demon.playerId, demon.playerId);
 
-    expect(result).toEqual({ targetPlayerId: demon.playerId, inheritance: null });
+    expect(result).toEqual({ targetPlayerId: demon.playerId, inheritance: null, killed: true });
     expect(demon.alive).toBe(false);
   });
 

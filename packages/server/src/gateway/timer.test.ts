@@ -53,10 +53,16 @@ describe('phase timer', () => {
     const distributedPromise = waitFor(stSocket, ServerEvents.GameDistributed);
     stSocket.emit(ClientEvents.StorytellerStartDistribution);
     await distributedPromise;
+    // A real game now OPENS at night (the first night runs before Day 1), so this
+    // helper advances to the day itself. The tests below then exercise the
+    // day -> night transition, which is the one that carries a timer.
+    const dayPromise = waitForPhaseChanged(stSocket, (p) => p.phase === 'day');
+    stSocket.emit(ClientEvents.StorytellerSetPhase, { phase: 'day' });
+    await dayPromise;
     return { code, stSocket };
   }
 
-  /** Waits for a GamePhaseChanged event whose payload satisfies `predicate`, ignoring earlier unrelated broadcasts (e.g. distribution's own day-phase announcement) still in flight. */
+  /** Waits for a GamePhaseChanged event whose payload satisfies `predicate`, ignoring earlier unrelated broadcasts (e.g. distribution's own night-phase announcement) still in flight. */
   async function waitForPhaseChanged(
     socket: ClientSocket,
     predicate: (payload: { phase: string; dayNumber: number; phaseEndsAt: number | null }) => boolean

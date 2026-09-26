@@ -1,6 +1,7 @@
 import type { WinningTeam, GameEndReason } from '@clocktower/shared';
 import type { GameSession, PlayerRecord } from '../session/store.js';
 import { livingPlayerCount } from '../session/store.js';
+import { reassignBluffFor } from './demonKill.js';
 
 export interface WinCheckResult {
   winner: WinningTeam;
@@ -29,6 +30,11 @@ function livingDemon(session: GameSession): PlayerRecord | null {
  * player count (AFTER this death) is below 5.
  */
 export function tryScarletWomanTakeover(session: GameSession, deadDemonId: string): ScarletWomanTakeoverResult | null {
+  // FIXME(issue #2 follow-up): the official text is "if there are 5 or MORE
+  // players alive", which is `livingPlayerCount(session) >= 5`. This reads `< 5`,
+  // so a 5-alive game does not trigger the takeover. That off-by-one is tracked
+  // separately and deliberately NOT fixed here — mixing it into the Night Engine
+  // work would make this review much harder to read.
   if (livingPlayerCount(session) < 5) return null;
 
   const scarletWoman = [...session.players.values()].find(
@@ -41,6 +47,10 @@ export function tryScarletWomanTakeover(session: GameSession, deadDemonId: strin
 
   scarletWoman.character = inheritedCharacterId;
   scarletWoman.characterType = 'demon';
+  // The takeover invalidates the registration and the bluff the Scarlet Woman
+  // was playing on, for the same reason the Imp hand-off does.
+  scarletWoman.registration = { alignment: null, characterType: null };
+  reassignBluffFor(session, scarletWoman);
 
   return {
     previousDemonPlayerId: deadDemonId,
@@ -81,4 +91,46 @@ export function checkWinCondition(session: GameSession, deathReason: 'executed' 
 export function endGame(session: GameSession, winner: WinningTeam, reason: GameEndReason): void {
   session.phase = 'ended';
   session.gameResult = { winner, reason };
+}
+
+/**
+ * Saint: "If you die by execution, your team loses."
+ *
+ * Checked from the execution itself rather than from a generic death sweep,
+ * because a night death is explicitly NOT a trigger — only execution is. Returns
+ * null when the executed player is not a functioning Saint.
+ *
+ * A DRUNK OR POISONED SAINT DOES NOT TRIGGER. A poisoned player has no ability,
+ * and the Poisoner poisons "tonight and tomorrow day" — so a Saint poisoned
+ * before being executed really does not take their team down with them. This is a
+ * well-known ruling and getting it wrong hands Evil an instant, unearned win, so
+ * it is called out explicitly rather than left implicit.
+ */
+export function checkSaintExecution(session: GameSession, executedPlayerId: string): WinCheckResult | null {
+  const saint = session.players.get(executedPlayerId);
+  if (!saint) return null;
+  if (saint.character !== 'saint') return null;
+  if (saint.statusEffects.poisoned || saint.statusEffects.drunk) return null;
+  return { winner: 'evil', reason: 'saint-executed' };
+}
+
+/**
+ * Mayor: "If only 3 players live & no execution occurs, your team wins."
+ *
+ * All three clauses are load-bearing and all three are enforced here:
+ *   - exactly 3 living (not 2 — that is the generic Evil win),
+ *   - a living Mayor,
+ *   - and no execution today, which means no QUALIFYING nomination on the record
+ *     and no nomination still awaiting a ruling. A day that is still running its
+ *     first vote has not yet had "no execution", so the Mayor cannot trigger
+ *     while a vote is still open.
+ */
+export function checkMayorWin(session: GameSession): WinCheckResult | null {
+  if (livingPlayerCount(session) !== 3) return null;
+  const mayor = [...session.players.values()].find((p) => p.alive && p.character === 'mayor');
+  if (!mayor) return null;
+  if (session.resolvedNominationsToday.length > 0) return null;
+  if (session.nomination && (!session.nomination.closed || session.nomination.pendingExecution)) return null;
+  if (mayor.statusEffects.poisoned || mayor.statusEffects.drunk) return null;
+  return { winner: 'good', reason: 'mayor-three-left' };
 }

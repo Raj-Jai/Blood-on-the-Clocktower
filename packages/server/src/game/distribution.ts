@@ -8,10 +8,13 @@ import {
   MIN_PLAYERS,
   type CharacterDefinition,
   type CharacterType,
+  type DistributionCounts,
   type DistributionPayload,
 } from '@clocktower/shared';
 import type { GameSession, PlayerRecord } from '../session/store.js';
+import { logNightEvent } from '../session/store.js';
 import { Errors } from '../errors.js';
+import { chooseRedHerring, chooseStickyRegistration } from './liePolicy.js';
 
 /** Fisher-Yates shuffle, returns a new array (does not mutate input). */
 export function shuffle<T>(items: readonly T[]): T[] {
@@ -33,9 +36,35 @@ function sampleCharacters(type: CharacterType, count: number): CharacterDefiniti
 }
 
 /**
+ * The Baron's setup modifier: "[+2 Outsiders]".
+ *
+ * This was dead text before. The distribution table is static and nothing ever
+ * checked for the Baron, so a game containing the Baron played with the normal
+ * setup — the Baron's entire effect is the setup change, so the character did
+ * literally nothing.
+ *
+ * The modifier is applied as a setup modifier on the CHARACTER COUNTS, not on
+ * the drawn set: +2 Outsiders, -2 Townsfolk, all other counts untouched. Total
+ * players is unchanged, which is why this is safe for every supported count
+ * (the lowest Townsfolk count in the table is 3, so it can never go negative).
+ */
+export function applyBaronModifier(counts: DistributionCounts): DistributionCounts {
+  const townsfolk = counts.townsfolk - 2;
+  if (townsfolk < 0) {
+    throw new Error(`Baron setup is not possible at this player count (would need ${townsfolk} Townsfolk)`);
+  }
+  return { ...counts, townsfolk, outsider: counts.outsider + 2 };
+}
+
+/**
  * Randomly assigns exactly one Trouble Brewing character to each joined player,
- * using the official player-count distribution table. Mutates the session's
- * PlayerRecords in place.
+ * using the official player-count distribution table, honouring setup modifiers.
+ * Mutates the session's PlayerRecords in place.
+ *
+ * Minions are sampled BEFORE the setup modifier is applied, because the modifier
+ * depends on whether the Baron was drawn. Sampling the Minions first is the only
+ * ordering that can answer "is the Baron in play?" and then adjust the rest of the
+ * roster for it.
  */
 export function distributeRoles(session: GameSession): void {
   const n = session.players.size;
@@ -43,13 +72,23 @@ export function distributeRoles(session: GameSession): void {
     throw Errors.distributionRange(MIN_PLAYERS, MAX_PLAYERS);
   }
 
-  const counts = getDistributionCounts(n);
+  const baseCounts = getDistributionCounts(n);
+  const minions = sampleCharacters('minion', baseCounts.minion);
+  const demons = sampleCharacters('demon', baseCounts.demon);
+
+  const baronInPlay = minions.some((c) => c.id === 'baron');
+  const counts = baronInPlay ? applyBaronModifier(baseCounts) : baseCounts;
+
   const selected: CharacterDefinition[] = [
     ...sampleCharacters('townsfolk', counts.townsfolk),
     ...sampleCharacters('outsider', counts.outsider),
-    ...sampleCharacters('minion', counts.minion),
-    ...sampleCharacters('demon', counts.demon),
+    ...minions,
+    ...demons,
   ];
+
+  if (selected.length !== n) {
+    throw new Error(`Distribution mismatch: selected ${selected.length} characters for ${n} players`);
+  }
 
   const shuffledCharacters = shuffle(selected);
   const shuffledPlayers = shuffle([...session.players.values()]);
@@ -65,6 +104,10 @@ export function distributeRoles(session: GameSession): void {
   });
 
   assignBluffs(session);
+  assignDrunkCover(session);
+  assignRedHerring(session);
+  assignRegistrations(session);
+  markDrunkStatus(session);
 }
 
 /**
@@ -89,6 +132,98 @@ function assignBluffs(session: GameSession): void {
   });
 }
 
+/**
+ * Picks the Townsfolk a Drunk believes themself to be, and LOGS the choice.
+ *
+ * The Drunk must believe they are a Townsfolk character, so the cover is drawn
+ * from Townsfolk that are NOT in play (otherwise they would learn their own
+ * ability's answer). If every Townsfolk is in play, the pool falls back to the
+ * whole Townsfolk list; that is a data edge case at high player counts, not a
+ * real scenario, and it is logged.
+ */
+function assignDrunkCover(session: GameSession): void {
+  const drunk = [...session.players.values()].filter((p) => p.character === 'drunk');
+  if (drunk.length === 0) return;
+
+  const inPlayIds = new Set(
+    [...session.players.values()].map((p) => p.character).filter((c): c is string => c !== null)
+  );
+  const unusedTownsfolk = TROUBLE_BREWING_CHARACTERS.filter((c) => c.type === 'townsfolk' && !inPlayIds.has(c.id));
+  const pool = unusedTownsfolk.length > 0 ? unusedTownsfolk : charactersByType('townsfolk');
+  const ordered = shuffle(pool);
+
+  drunk.forEach((player, i) => {
+    const cover = ordered[i % ordered.length]!;
+    player.drunkCoverCharacterId = cover.id;
+    logNightEvent(
+      session,
+      'setup-default',
+      `Drunk cover chosen for ${player.displayName}: they believe they are the ${cover.name}. Override in the discretion panel.`
+    );
+  });
+}
+
+/**
+ * Picks the Fortune Teller red herring and LOGS it. Fixed for the game unless
+ * the Storyteller moves it, because the official text promises a Good player who
+ * registers as a Demon to the Fortune Teller. A fixed one is learnable, which is
+ * why the discretion panel can move it each night.
+ */
+function assignRedHerring(session: GameSession): void {
+  const chosen = chooseRedHerring(session);
+  if (!chosen) return;
+  for (const player of session.players.values()) {
+    player.fortuneTellerRedHerringPlayerId = chosen.playerId;
+  }
+  logNightEvent(
+    session,
+    'setup-default',
+    `Fortune Teller red herring chosen: ${chosen.displayName} registers as the Demon to the Fortune Teller. Override in the discretion panel.`
+  );
+}
+
+/**
+ * Applies each eligible character's STICKY registration, and logs it.
+ *
+ * Default is "no lie" (registration stays null, i.e. the truth) for most
+ * eligible players — see `chooseStickyRegistration` for why an engine that
+ * always lied would be trivially detectable.
+ */
+function assignRegistrations(session: GameSession): void {
+  for (const player of session.players.values()) {
+    const def = player.character ? getCharacterById(player.character) : undefined;
+    const registration = chooseStickyRegistration(session, player, def);
+    if (!registration) {
+      player.registration = { alignment: null, characterType: null };
+      logNightEvent(
+        session,
+        'setup-default',
+        `${player.displayName} (${def?.name ?? 'unknown'}) registers as themself — no lie generated. Set a registration in the discretion panel to lie.`
+      );
+      continue;
+    }
+    player.registration = registration;
+    logNightEvent(
+      session,
+      'setup-default',
+      `${player.displayName} (${def?.name ?? 'unknown'}) registers as ${registration.alignment} ${registration.characterType} to detection abilities. Override in the discretion panel.`
+    );
+  }
+}
+
+/**
+ * A Drunk is permanently drunk. This is the flag the lie policy reads, so it is
+ * what makes the Drunk receive unreliable rather than simply false information.
+ */
+function markDrunkStatus(session: GameSession): void {
+  for (const player of session.players.values()) {
+    if (player.character === 'drunk') {
+      player.statusEffects.drunk = true;
+      logNightEvent(session, 'setup-default', `${player.displayName} is the Drunk and receives unreliable information all game.`);
+    }
+  }
+}
+
 export function resetDistribution(session: GameSession): void {
   for (const player of session.players.values()) {
     player.character = null;
@@ -99,7 +234,14 @@ export function resetDistribution(session: GameSession): void {
     player.statusEffects = { poisoned: false, drunk: false, protected: false };
     player.hasNominatedToday = false;
     player.bluffCharacterId = null;
+    player.registration = { alignment: null, characterType: null };
+    player.drunkCoverCharacterId = null;
+    player.fortuneTellerRedHerringPlayerId = null;
+    player.butlerChoice = null;
   }
+  session.impHeirChoice = null;
+  session.virginHasTriggered = false;
+  session.slayerHasUsed = false;
 }
 
 function evilTeammatesOf(session: GameSession, selfId: string) {
@@ -113,21 +255,39 @@ function evilTeammatesOf(session: GameSession, selfId: string) {
     }));
 }
 
-/** Builds the per-recipient distribution payload for a single player. Never includes other Good players' data. */
+/**
+ * Builds the per-recipient distribution payload for a single player. Never
+ * includes other Good players' data.
+ *
+ * THE DRUNK CASE IS A LIVE INFORMATION LEAK, AND IS HANDLED HERE. A Drunk was
+ * previously sent `characterName: 'Drunk'` and the Outsider ability text "You do
+ * not know you are the Drunk" — on a shared screen, or read aloud, or picked up
+ * by a screen reader, that tells the whole table exactly who the Drunk is the
+ * instant the Drunk opens the app. The payload now reports the COVER character:
+ * name, ability, type and id all describe what they believe they are, and
+ * `isDrunkCover` lets the client keep the cover stable without ever knowing the
+ * truth.
+ */
 export function buildPlayerDistributionPayload(session: GameSession, player: PlayerRecord): DistributionPayload {
-  const def = player.character ? getCharacterById(player.character) : undefined;
-  if (!def || !player.characterType || !player.alignment) {
+  const trueDef = player.character ? getCharacterById(player.character) : undefined;
+  if (!trueDef || !player.characterType || !player.alignment) {
     throw new Error(`Player ${player.playerId} has no character assigned yet`);
   }
+
+  const isDrunk = player.character === 'drunk' && player.drunkCoverCharacterId !== null;
+  const def = isDrunk ? getCharacterById(player.drunkCoverCharacterId!) ?? trueDef : trueDef;
+
   const base = {
     role: 'player' as const,
     playerId: player.playerId,
     character: def.id,
     characterName: def.name,
-    characterType: player.characterType,
+    // A Drunk believes they are a Townsfolk, so that is the type they see.
+    characterType: isDrunk ? def.type : player.characterType,
     alignment: player.alignment,
     ability: def.ability,
   };
+
   if (player.alignment === 'evil') {
     const bluffDef = player.bluffCharacterId ? getCharacterById(player.bluffCharacterId) : undefined;
     return {

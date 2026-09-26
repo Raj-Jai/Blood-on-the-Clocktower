@@ -12,7 +12,20 @@ function formatRemaining(ms: number): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-/** Live countdown ticking locally from the server-provided end timestamp, so no per-second network traffic is needed. */
+/**
+ * Live countdown ticking locally from the server-provided end timestamp, so no per-second network traffic is needed.
+ *
+ * KNOWN ACCESSIBILITY DEFECT (pre-existing, deliberately not fixed here): the
+ * element below is `role="timer"` with `aria-live="polite"` and its text changes
+ * every second, so a screen reader is interrupted once per second for the entire
+ * phase — which makes the timer actively hostile to anyone navigating by screen
+ * reader, for the whole phase, in a game where thinking time is the resource
+ * under pressure. The fix is a coarser announcement (announce on minute
+ * boundaries, or on the last 10 seconds) or no live region at all with a separate
+ * polite summary that changes once. It is a separate change from the Night
+ * Engine because it affects the day timer too, and mixing an a11y fix into the
+ * night work would make both reviews harder.
+ */
 export function PhaseTimer({ phaseEndsAt, phase }: PhaseTimerProps) {
   const [now, setNow] = useState(() => Date.now());
 

@@ -46,6 +46,12 @@ export function buildGrimoire(session: GameSession): GrimoirePlayerEntry[] {
       seatIndex: p.seatIndex,
       livingLeftNeighborId: left?.playerId ?? null,
       livingRightNeighborId: right?.playerId ?? null,
+      // Hidden-state decisions, Storyteller-only: what the server chose to
+      // register, who the Drunk really is, and where the red herring sits.
+      registration: p.registration,
+      drunkCoverCharacterId: p.drunkCoverCharacterId,
+      fortuneTellerRedHerringPlayerId: p.fortuneTellerRedHerringPlayerId,
+      butlerChoice: p.butlerChoice,
     };
   });
 }

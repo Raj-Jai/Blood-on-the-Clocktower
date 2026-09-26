@@ -130,6 +130,9 @@ describe('win/end-game gateway flow', () => {
 
   it('StorytellerDemonKill self-kill with a living Minion causes inheritance, notifies the Storyteller, and does not end the game', async () => {
     const { session, stSocket, playerSockets, players } = await setUpGame(5);
+    // A night kill now requires the night phase (the kill button used to be live
+    // during discussion, which is both a rules violation and a dead giveaway).
+    session.phase = 'night';
     const [demon, minion, t1, t2, outsider] = players;
     setCharacter(demon!, 'demon', 'imp');
     setCharacter(minion!, 'minion', 'poisoner');
@@ -163,7 +166,8 @@ describe('win/end-game gateway flow', () => {
   }, 20000);
 
   it('StorytellerDemonKill self-kill with no living Minion ends the game with Good winning', async () => {
-    const { stSocket, playerSockets, players } = await setUpGame(5);
+    const { session, stSocket, playerSockets, players } = await setUpGame(5);
+    session.phase = 'night';
     const [demon, t1, t2, t3, outsider] = players;
     setCharacter(demon!, 'demon', 'imp');
     setCharacter(t1!, 'townsfolk', 'chef');

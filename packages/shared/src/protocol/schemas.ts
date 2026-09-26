@@ -74,6 +74,46 @@ export const AnswerQuestionSchema = z.object({
 export const DemonKillSchema = z.object({
   targetPlayerId: z.string().min(1),
 });
+
+/** A waker's own night choice. Max 2 because no Trouble Brewing ability picks more. */
+export const SubmitNightChoiceSchema = z.object({
+  targetIds: z.array(z.string().min(1)).max(2),
+});
+
+/** Storyteller overrides for every value the server generates on the Storyteller's behalf. */
+export const SetDiscretionSchema = z.object({
+  /** Re-picks which Townsfolk a Drunk believes themself to be. */
+  drunkCoverPlayerId: z.string().min(1).optional(),
+  /** Re-picks which Good player registers as the Demon to the Fortune Teller. */
+  redHerringPlayerId: z.string().min(1).optional(),
+  /** Which living Minion inherits the Demon if the Imp self-kills, for the current night. */
+  impHeirPlayerId: z.string().min(1).optional(),
+  /** Per-player registration overrides (Recluse / Spy), applied for the current night. */
+  registrations: z
+    .array(
+      z.object({
+        playerId: z.string().min(1),
+        alignment: z.enum(['good', 'evil']).optional(),
+        characterType: z.enum(['townsfolk', 'outsider', 'minion', 'demon']).optional(),
+      })
+    )
+    .max(15)
+    .optional(),
+  /** Free-text replacement for one resolved night step, sent verbatim to that waker. */
+  stepOverride: z
+    .object({
+      characterId: z.string().min(1),
+      text: z.string().min(1).max(500),
+    })
+    .optional(),
+});
+
+export const AdvanceNightSchema = z.object({
+  action: z.enum(['next', 'previous', 'goto', 'resolve']),
+  /** Only used with action 'goto'. */
+  stepIndex: z.number().int().min(0).optional(),
+});
+
 export const EndGameSchema = z.object({
   winner: z.enum(['good', 'evil']),
 });

@@ -8,6 +8,8 @@ const REASON_TEXT: Record<GameEndedPayload['reason'], string> = {
   'demon-executed': 'The Demon was executed.',
   'demon-self-killed': 'The Demon killed themself, and no Minion could inherit the role.',
   'two-players-left': 'Only two players remain.',
+  'saint-executed': 'The Saint was executed.',
+  'mayor-three-left': 'Only three players remain and nobody was executed today.',
   'storyteller-ended': 'The Storyteller ended the game.',
 };
 

@@ -20,6 +20,32 @@ export interface PlayerRecord {
   seatIndex: number;
   /** For Evil players: the one fixed bluff character id assigned at distribution time (stable across reconnects). Null for Good players or before distribution. */
   bluffCharacterId: string | null;
+  /**
+   * What this player is treated as by *detection* abilities (Chef, Empath,
+   * Fortune Teller, Washerwoman, …). `null` on either field means "the truth".
+   *
+   * This is deliberately NOT the same as `alignment`: per the official glossary
+   * a Recluse "might register as evil" while still being a Good player. Every
+   * detection ability must read this via `perceivedAs()`, never `alignment`
+   * directly.
+   */
+  registration: { alignment: Alignment | null; characterType: CharacterType | null };
+  /** Set once at distribution for a Drunk: the Townsfolk they believe themself to be. Never shown to them as "Drunk". */
+  drunkCoverCharacterId: string | null;
+  /**
+   * The Good player who registers as the Demon to the Fortune Teller (the
+   * "red herring"). Chosen at setup and constant for the whole game unless the
+   * Storyteller overrides it — a fixed red herring IS learnable by a careful
+   * table, so the discretion panel must be able to move it each night.
+   */
+  fortuneTellerRedHerringPlayerId: string | null;
+  /**
+   * Butler: the player they chose, and the day it applies to. Recording the day
+   * is how the restriction expires without a separate clear pass — the night
+   * that produced it runs BEFORE that day's `resetForNewDay`, so clearing there
+   * would wipe the choice before it could ever be used.
+   */
+  butlerChoice: { masterPlayerId: string; forDayNumber: number } | null;
 }
 
 export interface ActiveNomination {
@@ -50,12 +76,47 @@ export interface QuestionEntry {
   askedAt: number;
 }
 
+export interface NightStepState {
+  characterId: string;
+  wakerPlayerId: string;
+  targetIds: string[];
+  resolved: boolean;
+  /** Free-text result the Storyteller supplied via the discretion panel, sent verbatim to the waker. */
+  overrideText: string | null;
+}
+
+export interface NightState {
+  steps: NightStepState[];
+  openedAt: number;
+  /** Step the Storyteller's stepper is pointing at. Presentation only. */
+  activeIndex: number;
+  /** True once resolveNight has run for this night. */
+  resolved: boolean;
+}
+
 export interface GameSession {
   code: string;
   storytellerConnectionId: string | null;
   storytellerToken: string;
   phase: GamePhase;
   dayNumber: number;
+  /** 0 before the first night is opened, then 1, 2, … Drives "is this the First Night" order. */
+  nightNumber: number;
+  /** The night currently being woken, or null between phases. */
+  currentNight: NightState | null;
+  /** Append-only audit trail of every generated default, override, and night resolution. Storyteller-only. */
+  log: NightLogEntry[];
+  /** Per-game lie-policy config. 'sticky' is the default; see liePolicy.ts for the trade-off. */
+  liePolicy: LiePolicyConfig;
+  /**
+   * Storyteller's chosen Imp self-kill heir for a specific night, set via the
+   * discretion panel. When absent for the current night, demonKill falls back to
+   * a random living Minion and LOGS that it did so.
+   */
+  impHeirChoice: { nightNumber: number; playerId: string } | null;
+  /** One-shot ability flags, so Virgin/Slayer cannot trigger twice. */
+  virginHasTriggered: boolean;
+  slayerHasUsed: boolean;
   script: 'trouble-brewing';
   players: Map<string, PlayerRecord>;
   nomination: ActiveNomination | null;
@@ -73,7 +134,30 @@ export interface GameSession {
   lastActivityAt: number;
 }
 
+export interface NightLogEntry {
+  night: number;
+  at: number;
+  kind: string;
+  detail: string;
+}
+
+/**
+ * Per-game lie-policy configuration.
+ *
+ * 'sticky' (the default) makes generated information a pure function of its
+ * inputs, so the same table + the same night always produces the same lie. That
+ * is more defensible against reverse-engineering and it is auditable, but a
+ * table that plays many games can eventually learn it. 'varied' adds a nonce so
+ * the same inputs can produce different lies on repeat calls, which is harder
+ * to reverse-engineer but also makes a given night non-reproducible. See the
+ * trade-off note in liePolicy.ts.
+ */
+export interface LiePolicyConfig {
+  consistency: 'sticky' | 'varied';
+}
+
 const MAX_CHAT_HISTORY = 200;
+const MAX_NIGHT_LOG = 500;
 const SESSION_IDLE_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 export class SessionStore {
@@ -90,6 +174,13 @@ export class SessionStore {
       storytellerToken,
       phase: 'lobby',
       dayNumber: 0,
+      nightNumber: 0,
+      currentNight: null,
+      log: [],
+      liePolicy: { consistency: 'sticky' },
+      impHeirChoice: null,
+      virginHasTriggered: false,
+      slayerHasUsed: false,
       script: 'trouble-brewing',
       players: new Map(),
       nomination: null,
@@ -141,6 +232,10 @@ export class SessionStore {
       onboardingSeen: false,
       seatIndex: session.players.size,
       bluffCharacterId: null,
+      registration: { alignment: null, characterType: null },
+      drunkCoverCharacterId: null,
+      fortuneTellerRedHerringPlayerId: null,
+      butlerChoice: null,
     };
     session.players.set(playerId, record);
     return record;
@@ -162,6 +257,25 @@ export function pushChatMessage(history: ChatMessage[], message: ChatMessage): v
   if (history.length > MAX_CHAT_HISTORY) {
     history.splice(0, history.length - MAX_CHAT_HISTORY);
   }
+}
+
+/**
+ * Appends one auditable line to the session night log.
+ *
+ * Every hidden-state default the server chooses on the Storyteller's behalf
+ * goes through here, timestamped. That is deliberate: the community's
+ * "gardening" argument is about a Storyteller choosing hidden state late and
+ * opportunistically. A server that picks it at a fixed, pre-deal,
+ * log-visible moment is more defensible than a human picking it later — so the
+ * timing is a feature, and it is made visible in the Storyteller UI.
+ */
+export function logNightEvent(session: GameSession, kind: string, detail: string): NightLogEntry {
+  const entry: NightLogEntry = { night: session.nightNumber, at: Date.now(), kind, detail };
+  session.log.push(entry);
+  if (session.log.length > MAX_NIGHT_LOG) {
+    session.log.splice(0, session.log.length - MAX_NIGHT_LOG);
+  }
+  return entry;
 }
 
 export function livingPlayerCount(session: GameSession): number {

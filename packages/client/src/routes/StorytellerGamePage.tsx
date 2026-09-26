@@ -4,6 +4,7 @@ import type { Socket } from 'socket.io-client';
 import type { SessionState } from '../hooks/useSession.js';
 import { GrimoireTable } from '../components/grimoire/GrimoireTable.js';
 import { NightOrderPanel } from '../components/grimoire/NightOrderPanel.js';
+import { NightDiscretionPanel } from '../components/grimoire/NightDiscretionPanel.js';
 import { EvilChatPanel } from '../components/chat/EvilChatPanel.js';
 import { OpenChatPanel } from '../components/chat/OpenChatPanel.js';
 import { ExecutionBanner } from '../components/shared/ExecutionBanner.js';
@@ -140,7 +141,11 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
         <div>
           <h1 style={{ margin: 0 }}>Storyteller</h1>
           <p className="muted" style={{ margin: 0 }}>
-            {gameEnded ? 'Game over' : session.phase === 'day' ? `Day ${session.dayNumber}` : `Night ${session.dayNumber}`}
+            {gameEnded
+              ? 'Game over'
+              : session.phase === 'day'
+                ? `Day ${session.dayNumber}`
+                : `Night ${Math.max(1, session.nightNumber)}`}
           </p>
         </div>
         <div className="mobile-stack" style={{ display: 'flex', gap: 8 }}>
@@ -175,14 +180,20 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
                   </option>
                 ))}
             </select>
-            <button className="btn btn-inline btn-danger" onClick={demonKill} disabled={!demonKillTarget || !livingDemon}>
+            <button
+              className="btn btn-inline btn-danger"
+              onClick={demonKill}
+              disabled={!demonKillTarget || !livingDemon || session.phase !== 'night'}
+            >
               Kill
             </button>
           </div>
           <p className="faint" style={{ marginTop: 8 }}>
-            {livingDemon
-              ? 'Triggers the night-kill (or self-kill, if the Demon targets themself). A self-kill hands the role to a random living Minion.'
-              : 'No living Demon — the kill action is unavailable.'}
+            {session.phase !== 'night'
+              ? 'The Demon can only kill at night — switch the phase to night first.'
+              : livingDemon
+                ? 'Manual override for the night kill. The night engine normally applies the Imp’s own choice; use this when you are intervening. A self-kill hands the role to the Minion you picked in Discretion, or to a random one if you did not.'
+                : 'No living Demon — the kill action is unavailable.'}
           </p>
 
           <div style={{ marginTop: 16, borderTop: '1px solid var(--border-color, rgba(255,255,255,0.1))', paddingTop: 16 }}>
@@ -249,7 +260,9 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
         <GrimoireTable grimoire={grimoire} onToggleStatus={toggleStatus} onMarkDead={markDead} />
       </div>
 
-      <NightOrderPanel grimoire={grimoire} isFirstNight={session.dayNumber <= 1 && session.phase === 'night'} />
+      <NightOrderPanel socket={socket} nightOrder={session.nightOrder} nightLog={session.nightLog} />
+
+      <NightDiscretionPanel socket={socket} grimoire={grimoire} nightNumber={session.nightNumber} />
 
       {session.nomination && !gameEnded && (
         <div className="panel">

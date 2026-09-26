@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ClientEvents } from '@clocktower/shared';
 import type { Socket } from 'socket.io-client';
 import type { SessionState } from '../hooks/useSession.js';
+import { useSpeech } from '../hooks/useSpeech.js';
 import { CharacterCard } from '../components/character/CharacterCard.js';
 import { NominationBar } from '../components/voting/NominationBar.js';
 import { VoteTally } from '../components/voting/VoteTally.js';
@@ -15,6 +16,7 @@ import { Graveyard } from '../components/seating/Graveyard.js';
 import { PhaseTimer } from '../components/shared/PhaseTimer.js';
 import { QuestionQueuePanel } from '../components/questions/QuestionQueuePanel.js';
 import { RoleReferenceSection } from '../components/reference/RoleReferenceSection.js';
+import { NightPromptPanel } from '../components/grimoire/NightPromptPanel.js';
 import type { LobbyPlayer } from '../hooks/useSession.js';
 
 function SeatingCirclePanel({ players, selfPlayerId }: { players: LobbyPlayer[]; selfPlayerId: string }) {
@@ -40,12 +42,18 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
   const [showRules, setShowRules] = useState(false);
   const [showSeating, setShowSeating] = useState(false);
   const [showRoles, setShowRoles] = useState(false);
+  // The Storyteller's free-text result is dismissible, because it is private
+  // information that must not be left sitting on a passed-around screen.
+  const [dismissedResult, setDismissedResult] = useState<string | null>(null);
+  const speech = useSpeech();
 
   const distribution = session.distribution;
   const isEvil = distribution?.role === 'player' && distribution.alignment === 'evil';
   const gameEnded = session.phase === 'ended';
   const canNominate = session.phase === 'day' && session.alive && !session.nomination;
   const canVote = session.phase === 'day' && !session.nomination?.closed && !gameEnded;
+  const showAbilityResult = Boolean(session.abilityResult) && session.abilityResult !== dismissedResult;
+  const hasNightActivity = Boolean(session.nightPrompt) || Boolean(session.nightResult);
 
   function nominate(targetPlayerId: string) {
     socket?.emit(ClientEvents.PlayerNominate, { targetPlayerId });
@@ -100,6 +108,22 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
 
       <PhaseTimer phaseEndsAt={session.phaseEndsAt} phase={session.phase} />
 
+      {hasNightActivity && (
+        <NightPromptPanel
+          socket={socket}
+          prompt={session.nightPrompt}
+          result={session.nightResult}
+          // Only this player's own server-projected text is ever passed to the
+          // voice. Nothing is read from the Grimoire, another player's entry, or
+          // any Storyteller-only state, and the Spy's Grimoire is filtered out
+          // inside the panel as well.
+          onSpeak={speech.speak}
+          speechEnabled={speech.enabled}
+          onToggleSpeech={speech.setEnabled}
+          speechSupported={speech.supported}
+        />
+      )}
+
       <div className="tab-bar">
         <button className={tab === 'character' ? 'active' : ''} onClick={() => setTab('character')}>
           My Character
@@ -128,10 +152,19 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
             alignment={distribution.alignment}
             ability={distribution.ability}
           />
-          {session.abilityResult && (
+          {showAbilityResult && (
             <div className="panel">
-              <h3 style={{ marginTop: 0 }}>Storyteller Update</h3>
-              <p>{session.abilityResult}</p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                <h3 style={{ marginTop: 0 }}>Storyteller Update</h3>
+                <button
+                  className="btn btn-inline"
+                  onClick={() => setDismissedResult(session.abilityResult)}
+                  aria-label="Dismiss this update"
+                >
+                  Dismiss
+                </button>
+              </div>
+              <p style={{ marginBottom: 0 }}>{session.abilityResult}</p>
             </div>
           )}
           {isEvil && distribution.teammates && distribution.teammates.length > 0 && (

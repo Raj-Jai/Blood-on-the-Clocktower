@@ -40,6 +40,12 @@ export function RoleReferenceSection({ onClose }: RoleReferenceSectionProps) {
         <p className="faint" style={{ marginTop: -8 }}>
           Every character in Trouble Brewing and what they do. This doesn't reveal who has which role.
         </p>
+        {/* The asterisk convention is printed on the physical character sheets and
+            explained nowhere in the app, so "Each night*, you learn…" reads as a
+            typo to anyone who has not memorised the sheets. */}
+        <p className="faint" style={{ marginTop: 4, fontStyle: 'italic' }}>
+          * means “not on the first night”.
+        </p>
 
         {GROUP_ORDER.map((type) => (
           <div key={type} style={{ marginTop: 16 }}>
