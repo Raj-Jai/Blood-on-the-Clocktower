@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { ClientEvents, deriveStorytellerLine, type FlowState } from '@clocktower/shared';
 import type { Socket } from 'socket.io-client';
 
@@ -18,6 +18,19 @@ interface StorytellerScriptProps {
   readyToResolve: boolean;
   /** Steps still missing a choice, by character name, for the warning line. */
   outstanding: string[];
+}
+
+/** Ticks once a second while a pause is running, so the countdown is live. */
+function useCountdown(target: number | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (target === null) return undefined;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(timer);
+  }, [target]);
+  if (target === null) return 0;
+  return Math.max(0, Math.ceil((target - now) / 1000));
 }
 
 /**
@@ -43,6 +56,9 @@ export function StorytellerScript({
   outstanding,
 }: StorytellerScriptProps) {
   const line = deriveStorytellerLine(flow);
+  const secondsLeft = useCountdown(flow.wakeBlockedUntil);
+  const [delaySeconds, setDelaySeconds] = useState(flow.delaySeconds);
+  useEffect(() => setDelaySeconds(flow.delaySeconds), [flow.delaySeconds]);
 
   // Read the public line aloud as it changes. Only ever `line.say`, which comes
   // from the server's `FlowState.announcement` and is guaranteed leak-free.
@@ -54,6 +70,14 @@ export function StorytellerScript({
 
   function advance() {
     socket?.emit(ClientEvents.StorytellerFlowAdvance);
+  }
+
+  function skipDelay() {
+    socket?.emit(ClientEvents.StorytellerAdvanceNight, { action: 'skipDelay' });
+  }
+
+  function setDelay(seconds: number) {
+    socket?.emit(ClientEvents.StorytellerSetNightDelay, { seconds });
   }
 
   function resolveNight() {
@@ -86,6 +110,11 @@ export function StorytellerScript({
       </div>
 
       <p style={{ marginTop: 12, marginBottom: 0 }}>{line.action}</p>
+      {flow.stage === 'night-step' && flow.delaySeconds === 0 && (
+        <p className="faint" style={{ marginTop: 8 }}>
+          No pause between wakers is set, so the table can time the wake order.
+        </p>
+      )}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         {line.say && announcer.supported && (
@@ -107,6 +136,36 @@ export function StorytellerScript({
           <button className="btn btn-primary" onClick={advance}>
             Eyes are closed — start waking people
           </button>
+        )}
+        {flow.stage === 'night-step' && flow.wakeBlockedUntil !== null && (
+          <>
+            <span
+              className="muted"
+              style={{ fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}
+              data-testid="wake-countdown"
+            >
+              {secondsLeft > 0 ? `Next wake in ${secondsLeft}s` : 'Ready'}
+            </span>
+            <button className="btn btn-inline" onClick={skipDelay}>
+              Skip the wait
+            </button>
+          </>
+        )}
+        {flow.stage === 'night-step' && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.9rem' }}>
+            Pause between wakers
+            <input
+              className="input"
+              type="number"
+              min={0}
+              max={60}
+              style={{ width: 64 }}
+              value={delaySeconds}
+              onChange={(e) => setDelaySeconds(Math.max(0, Math.min(60, Number(e.target.value) || 0)))}
+              onBlur={() => setDelay(delaySeconds)}
+            />
+            seconds
+          </label>
         )}
         {flow.stage === 'night-step' && readyToResolve && !nightResolved && (
           <button className="btn btn-primary" onClick={resolveNight}>

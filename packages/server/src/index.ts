@@ -3,6 +3,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { createApp } from './http/app.js';
 import { SessionStore } from './session/store.js';
 import { registerGatewayHandlers } from './gateway/index.js';
+import { registerNightGateTicker } from './gateway/nightGate.js';
 
 const PORT = Number(process.env.PORT ?? 3001);
 // Comma-separated list of allowed origins, e.g. "https://your-app.netlify.app,https://deploy-preview-1--your-app.netlify.app"
@@ -23,6 +24,8 @@ const io = new SocketIOServer(httpServer, {
 });
 
 registerGatewayHandlers(io, store);
+// Releases the next waker once the pause between two of them has elapsed.
+registerNightGateTicker(io, store);
 
 // Bound memory for long-lived processes; ephemeral game sessions don't need to live forever.
 setInterval(() => store.cleanupIdleSessions(), 30 * 60 * 1000);

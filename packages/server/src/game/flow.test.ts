@@ -12,11 +12,15 @@ import { getCharacterById } from '@clocktower/shared';
 import { buildFlowState } from './flow.js';
 import {
   buildNightOrder,
+  endNight,
+  finishWake,
   firstPlayerOwingAChoice,
   markPassedAutoSteps,
   openNight,
   resolveNight,
+  skipWakeGate,
   submitNightChoice,
+  tickNightGate,
 } from './nightEngine.js';
 
 function setCharacter(player: PlayerRecord, characterId: string): void {
@@ -326,6 +330,119 @@ describe('the flow announcement never leaks', () => {
     // A player called "Imp" must not make every announcement look like a leak.
     expect(() => assertSpeakableAnnouncement('Imp, wake up.', ['Imp', 'Bram'])).not.toThrow();
     expect(() => assertSpeakableAnnouncement('poisons, close your eyes.', ['Imp', 'poisons'])).not.toThrow();
+  });
+});
+
+describe('the pause between wakers', () => {
+  function pausedSession(delaySeconds = 5) {
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'poisoner');
+    setCharacter(players[1]!, 'imp');
+    setCharacter(players[2]!, 'chef');
+    setCharacter(players[3]!, 'empath');
+    setCharacter(players[4]!, 'recluse');
+    session.phase = 'night';
+    session.nightNumber = 1;
+    openNight(session);
+    session.currentNight!.briefed = true;
+    session.currentNight!.delaySeconds = delaySeconds;
+    // Walk the Storyteller's cursor past the Empath and the Chef, who wake before
+    // the Poisoner and have nothing to choose. That is what clicking "next" does
+    // in the real flow, and without it the Poisoner could never be reached.
+    session.currentNight!.activeIndex = 3;
+    markPassedAutoSteps(session);
+    return { session, players };
+  }
+
+  it('says "close your eyes" after a waker finishes, and names nobody else', () => {
+    const { session, players } = pausedSession();
+    submitNightChoice(session, players[0]!.playerId, [players[4]!.playerId]);
+    finishWake(session, players[0]!.playerId);
+
+    const flow = buildFlowState(session);
+    expect(flow.stage).toBe('night-step');
+    expect(flow.announcement).toBe('Player0, close your eyes.');
+    expect(flow.closingPlayerName).toBe('Player0');
+    // Crucially, the next person is NOT announced while the pause runs — that is
+    // the entire point of it.
+    expect(flow.announcement).not.toContain('wake up');
+  });
+
+  it('does not release the next waker until the pause has elapsed', () => {
+    const { session, players } = pausedSession(5);
+    const started = Date.now();
+    submitNightChoice(session, players[0]!.playerId, [players[4]!.playerId]);
+    finishWake(session, players[0]!.playerId);
+    const gate = session.currentNight!.wakeGate!;
+    expect(gate.closesPlayerId).toBe(players[0]!.playerId);
+    expect(gate.opensAt).toBeGreaterThanOrEqual(started + 5000);
+
+    // Too early: still closed.
+    expect(tickNightGate(session, gate.opensAt - 1)).toBe(false);
+    expect(buildFlowState(session, gate.opensAt - 1).closingPlayerName).toBe('Player0');
+    expect(firstPlayerOwingAChoice(session)?.playerId).toBe(players[1]!.playerId);
+
+    // Elapsed: released, and the next waker is announced.
+    expect(tickNightGate(session, gate.opensAt)).toBe(true);
+    const after = buildFlowState(session, gate.opensAt);
+    expect(after.closingPlayerName).toBeNull();
+    expect(after.announcement).toBe('Player1, wake up.');
+    // And it is a one-shot: ticking again changes nothing.
+    expect(tickNightGate(session, gate.opensAt + 10_000)).toBe(false);
+  });
+
+  it('skips the pause when the Storyteller asks to move on', () => {
+    const { session, players } = pausedSession(30);
+    submitNightChoice(session, players[0]!.playerId, [players[4]!.playerId]);
+    finishWake(session, players[0]!.playerId);
+    expect(buildFlowState(session).closingPlayerName).toBe('Player0');
+    skipWakeGate(session);
+    expect(buildFlowState(session).announcement).toBe('Player1, wake up.');
+  });
+
+  it('opens no pause at all when the delay is zero', () => {
+    const { session, players } = pausedSession(0);
+    submitNightChoice(session, players[0]!.playerId, [players[4]!.playerId]);
+    finishWake(session, players[0]!.playerId);
+    expect(session.currentNight!.wakeGate).toBeNull();
+    expect(buildFlowState(session).announcement).toBe('Player1, wake up.');
+  });
+
+  it('carries the delay from one night to the next', () => {
+    const { session } = pausedSession(0);
+    session.lastNightDelaySeconds = 7;
+    endNight(session);
+    session.nightNumber = 1;
+    openNight(session);
+    expect(session.currentNight!.delaySeconds).toBe(7);
+  });
+
+  it('tells the Storyteller how long is left, without naming the next player', () => {
+    const { session, players } = pausedSession(5);
+    submitNightChoice(session, players[0]!.playerId, [players[4]!.playerId]);
+    finishWake(session, players[0]!.playerId);
+    const gate = session.currentNight!.wakeGate!;
+    const line = deriveStorytellerLine(buildFlowState(session, gate.opensAt - 3000));
+    expect(line.say).toBe('Player0, close your eyes.');
+    expect(line.action).toMatch(/wait 3s/i);
+    expect(line.action).toMatch(/cannot time the order/i);
+  });
+
+  it('never blocks the last waker from being woken by the pause', () => {
+    // The pause must not deadlock a table: if the pause is open when the night is
+    // resolved, the resolution still happens.
+    const { session, players } = pausedSession(30);
+    submitNightChoice(session, players[0]!.playerId, [players[4]!.playerId]);
+    finishWake(session, players[0]!.playerId);
+    session.currentNight!.activeIndex = session.currentNight!.steps.length;
+    markPassedAutoSteps(session);
+    submitNightChoice(session, players[1]!.playerId, [players[4]!.playerId]);
+    finishWake(session, players[1]!.playerId);
+    expect(session.currentNight!.wakeGate).not.toBeNull();
+    // Resolving mid-pause is allowed and clears it.
+    const report = resolveNight(session, null as never);
+    expect(report.outstanding).toEqual([]);
+    expect(session.currentNight!.resolved).toBe(true);
   });
 });
 

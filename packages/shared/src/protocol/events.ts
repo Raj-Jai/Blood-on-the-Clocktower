@@ -20,6 +20,7 @@ export const ClientEvents = {
   StorytellerSetDiscretion: 'storyteller:setDiscretion',
   StorytellerAdvanceNight: 'storyteller:advanceNight',
   StorytellerFlowAdvance: 'storyteller:flowAdvance',
+  StorytellerSetNightDelay: 'storyteller:setNightDelay',
   StorytellerEndGame: 'storyteller:endGame',
   PlayerSubmitNightChoice: 'player:submitNightChoice',
   ChatEvilSend: 'chat:evil:send',

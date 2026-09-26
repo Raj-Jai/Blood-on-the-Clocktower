@@ -16,6 +16,7 @@ import {
   ClientEvents,
   ReorderSeatsSchema,
   SetDiscretionSchema,
+  SetNightDelaySchema,
   SetPhaseSchema,
   SetPlayerAlignmentSchema,
   SetPlayerStatusSchema,
@@ -38,13 +39,16 @@ import { resolveDemonKill } from '../game/demonKill.js';
 import { checkMayorWin, checkSaintExecution, checkWinCondition, endGame, tryScarletWomanTakeover } from '../game/winConditions.js';
 import { broadcastFlow, buildFlowState } from '../game/flow.js';
 import {
+  buildNightOrder,
   endNight,
+  finishWake,
   markPassedAutoSteps,
   openNight,
   resolveNight,
+  sendActiveNightPrompt,
   sendNightLog,
   sendNightOrder,
-  sendActiveNightPrompt,
+  skipWakeGate,
   submitNightChoice,
 } from '../game/nightEngine.js';
 import { broadcastGrimoire, broadcastLobby, buildGrimoire, sendError, sendToPlayer, sendToStoryteller, sessionRoom, STORYTELLER_SOCKET_KEY } from '../game/broadcast.js';
@@ -388,6 +392,15 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
       guarded(io, socket, () => {
         const session = requireStoryteller(socket);
         const { action, stepIndex } = AdvanceNightSchema.parse(raw);
+        if (action === 'skipDelay') {
+          requireGameNotEnded(session);
+          skipWakeGate(session);
+          sendActiveNightPrompt(io, session);
+          sendNightState(io, session);
+          broadcastFlow(io, session);
+          store.touch(session);
+          return;
+        }
         const night = openNight(session);
         if (session.phase !== 'night') {
           session.phase = 'night';
@@ -429,6 +442,23 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
           return;
         }
 
+        // Stepping forward past a waker starts the same pause a submission does,
+        // so an auto-resolving character is waited on in exactly the same way.
+        // Read it BEFORE the cursor moves. Only a waker who is actually finished
+        // opens a pause — stepping past somebody who still owes a choice is a
+        // Storyteller mistake, and pausing on them would announce the wrong name.
+        let steppingPast: string | null = null;
+        if (action === 'next') {
+          const current = buildNightOrder(session)[night.activeIndex];
+          if (current) {
+            const stored = night.steps.find(
+              (s) => s.wakerPlayerId === current.wakerPlayerId && s.characterId === current.characterId
+            );
+            const finished = (current.targetCount ?? 0) === 0 || stored?.resolved === true;
+            if (finished) steppingPast = current.wakerPlayerId;
+          }
+        }
+
         if (action === 'next') night.activeIndex += 1;
         else if (action === 'previous') night.activeIndex -= 1;
         else if (action === 'goto' && stepIndex !== undefined) night.activeIndex = stepIndex;
@@ -439,9 +469,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         // because "the Chef woke" is information that the Chef is alive. Marking
         // them as the cursor passes is what lets the wake walk reach everyone.
         markPassedAutoSteps(session);
-        // Opening a night has to actually wake people: the prompt is the whole
-        // point of the engine, so stepping into a night sends it here too rather
-        // than only on the phase change.
+        if (steppingPast) finishWake(session, steppingPast);
         sendActiveNightPrompt(io, session);
         sendNightState(io, session);
         broadcastFlow(io, session);
@@ -458,9 +486,10 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         // The waker identity is read from the step inside submitNightChoice, so a
         // player cannot submit on someone else's behalf even if they try.
         submitNightChoice(session, player.playerId, targetIds, io);
-        // Releasing the next waker here is what stops the table stalling: once a
-        // player has acted, whoever owes the next choice is prompted without the
-        // Storyteller having to click through the order.
+        // The waker is done, so the table is told to close their eyes and the
+        // pause starts. Nothing new is prompted until the pause expires, which is
+        // what stops the table timing the wake order.
+        finishWake(session, player.playerId);
         sendActiveNightPrompt(io, session);
         sendNightState(io, session);
         broadcastFlow(io, session);
@@ -497,6 +526,25 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         // Everything else moves on its own (phase changes, resolutions, votes), so
         // pressing advance there would be a no-op with no honest meaning.
         throw Errors.flowNotAdvanceable();
+      })
+    );
+
+    socket.on(ClientEvents.StorytellerSetNightDelay, (raw: unknown) =>
+      guarded(io, socket, () => {
+        const session = requireStoryteller(socket);
+        const { seconds } = SetNightDelaySchema.parse(raw);
+        // A table preference, carried from night to night, so the Storyteller
+        // sets it once rather than every night.
+        session.lastNightDelaySeconds = seconds;
+        if (session.currentNight) session.currentNight.delaySeconds = seconds;
+        logDiscretion(
+          session,
+          seconds === 0
+            ? 'Pause between wakers disabled. The table will be able to time the wake order.'
+            : `Pause between wakers set to ${seconds}s.`
+        );
+        broadcastFlow(io, session);
+        store.touch(session);
       })
     );
 

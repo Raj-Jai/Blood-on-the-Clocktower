@@ -98,6 +98,22 @@ export interface NightState {
    * not a property of the state.
    */
   briefed: boolean;
+  /**
+   * The pause between one waker finishing and the next being announced.
+   *
+   * The rulebook's dawn rule generalised to the whole night: "The small wait at
+   * dawn prevents players from knowing for sure whether they were the last to act
+   * at night." Without a gap, back-to-back "X, wake up" / "Y, wake up" reveals the
+   * exact timing of every wake, and timing is how a table works out who acted
+   * before the kill. Set by the Storyteller; 0 disables the pause.
+   */
+  delaySeconds: number;
+  /**
+   * Open between a waker finishing and the next one being woken. While this is
+   * set the flow says "<name>, close your eyes" and no new prompt is sent, so
+   * nobody learns who is next until the pause has elapsed.
+   */
+  wakeGate: { closesPlayerId: string; opensAt: number } | null;
 }
 
 export interface GameSession {
@@ -112,6 +128,8 @@ export interface GameSession {
   currentNight: NightState | null;
   /** True once the table has been sent to the Grimoire to see who died. */
   dayRevealed: boolean;
+  /** The Storyteller's chosen pause between wakers, carried from night to night. */
+  lastNightDelaySeconds: number;
   /** Append-only audit trail of every generated default, override, and night resolution. Storyteller-only. */
   log: NightLogEntry[];
   /** Per-game lie-policy config. 'sticky' is the default; see liePolicy.ts for the trade-off. */
@@ -164,6 +182,14 @@ export interface LiePolicyConfig {
   consistency: 'sticky' | 'varied';
 }
 
+/**
+ * Default pause between one waker finishing and the next being woken. Long enough
+ * that a table cannot time consecutive wake-ups, short enough not to drag.
+ */
+export const DEFAULT_NIGHT_DELAY_SECONDS = 5;
+export const MIN_NIGHT_DELAY_SECONDS = 0;
+export const MAX_NIGHT_DELAY_SECONDS = 60;
+
 const MAX_CHAT_HISTORY = 200;
 const MAX_NIGHT_LOG = 500;
 const SESSION_IDLE_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -185,6 +211,7 @@ export class SessionStore {
       nightNumber: 0,
       currentNight: null,
       dayRevealed: false,
+      lastNightDelaySeconds: DEFAULT_NIGHT_DELAY_SECONDS,
       log: [],
       liePolicy: { consistency: 'sticky' },
       impHeirChoice: null,
@@ -212,6 +239,11 @@ export class SessionStore {
 
   touch(session: GameSession): void {
     session.lastActivityAt = Date.now();
+  }
+
+  /** Every live session. Used by the night-gate ticker, which polls for pending pauses. */
+  allSessions(): GameSession[] {
+    return [...this.sessions.values()];
   }
 
   deleteSession(code: string): void {

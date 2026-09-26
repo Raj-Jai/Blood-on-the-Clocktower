@@ -244,7 +244,17 @@ export function openNight(session: GameSession): NightState {
     overrideText: null,
   }));
 
-  session.currentNight = { steps, openedAt: Date.now(), activeIndex: 0, resolved: false, briefed: false };
+  session.currentNight = {
+    steps,
+    openedAt: Date.now(),
+    activeIndex: 0,
+    resolved: false,
+    briefed: false,
+    // Read from the previous night when the Storyteller set it, so the pause
+    // length is a table preference rather than something reset every night.
+    delaySeconds: session.lastNightDelaySeconds,
+    wakeGate: null,
+  };
   logNightEvent(
     session,
     'night-opened',
@@ -866,6 +876,11 @@ export function sendActiveNightPrompt(io: SocketIOServer, session: GameSession):
   if (!night || night.resolved) return;
   // During the briefing nobody is awake yet.
   if (!night.briefed) return;
+  // While the pause between wakers is running, nobody may be woken. This is the
+  // line that makes the pause real: without it the next prompt goes out the
+  // instant the previous player submitted and the table can time the order
+  // perfectly, which is the thing the pause exists to prevent.
+  if (wakeGateIsPending(session)) return;
 
   for (const step of buildNightOrder(session)) {
     const stored = findStoredStep(night, step);
@@ -894,6 +909,61 @@ export function pendingWakerNames(session: GameSession): string[] {
     if (player) names.push(player.displayName);
   }
   return names;
+}
+
+/**
+ * Records that a waker has finished, and opens the pause before the next one.
+ *
+ * THE PAUSE IS A RULE, NOT A POLISH DETAIL. The rulebook says of dawn: "The
+ * small wait at dawn prevents players from knowing for sure whether they were the
+ * last to act at night." That reasoning applies to every gap in the night, not
+ * just the last one. Announce "X, wake up" the instant X's turn ends and the
+ * table learns the exact timing of every wake — and timing is how players work
+ * out who acted before the Demon did.
+ *
+ * While the gate is open the flow says "X, close your eyes" and no new prompt is
+ * sent, so the next person is not announced until the pause has elapsed.
+ */
+export function finishWake(session: GameSession, playerId: string): void {
+  const night = session.currentNight;
+  if (!night || night.resolved) return;
+  if (night.delaySeconds <= 0) {
+    night.wakeGate = null;
+    markPassedAutoSteps(session);
+    return;
+  }
+  night.wakeGate = { closesPlayerId: playerId, opensAt: Date.now() + night.delaySeconds * 1000 };
+  markPassedAutoSteps(session);
+}
+
+/** Closes the pause immediately. The Storyteller's "skip the wait" control. */
+export function skipWakeGate(session: GameSession): void {
+  const night = session.currentNight;
+  if (!night?.wakeGate) return;
+  night.wakeGate = null;
+  markPassedAutoSteps(session);
+}
+
+/**
+ * Closes the pause if it has elapsed. Returns true when the flow changed and the
+ * caller should re-prompt and re-broadcast.
+ *
+ * `now` is a parameter so tests can drive the clock instead of sleeping.
+ */
+export function tickNightGate(session: GameSession, now: number = Date.now()): boolean {
+  const night = session.currentNight;
+  if (!night?.wakeGate) return false;
+  if (now < night.wakeGate.opensAt) return false;
+  night.wakeGate = null;
+  markPassedAutoSteps(session);
+  return true;
+}
+
+/** True while the pause before the next waker is still running. */
+export function wakeGateIsPending(session: GameSession, now: number = Date.now()): boolean {
+  const night = session.currentNight;
+  if (!night?.wakeGate) return false;
+  return now < night.wakeGate.opensAt;
 }
 
 /**

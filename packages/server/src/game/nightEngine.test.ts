@@ -872,6 +872,10 @@ describe('night engine over a real socket', () => {
     session.phase = 'day';
     session.dayNumber = 1;
     session.nightNumber = 0;
+    // No pause between wakers here: this test is about the prompt and the kill,
+    // and the pause is exercised separately in flow.test.ts. Leaving it on would
+    // mean waiting out a real delay between the Poisoner and the Imp.
+    session.lastNightDelaySeconds = 0;
     const demonSocket = playerSockets[tokens.findIndex((t) => t.playerId === players[0]!.playerId)]!;
     const targetSocket = playerSockets[tokens.findIndex((t) => t.playerId === players[1]!.playerId)]!;
 

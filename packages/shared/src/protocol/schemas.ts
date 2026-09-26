@@ -109,9 +109,14 @@ export const SetDiscretionSchema = z.object({
 });
 
 export const AdvanceNightSchema = z.object({
-  action: z.enum(['next', 'previous', 'goto', 'resolve']),
+  action: z.enum(['next', 'previous', 'goto', 'resolve', 'skipDelay']),
   /** Only used with action 'goto'. */
   stepIndex: z.number().int().min(0).optional(),
+});
+
+/** The Storyteller's pause between consecutive wakers. 0 disables it. */
+export const SetNightDelaySchema = z.object({
+  seconds: z.number().int().min(0).max(60),
 });
 
 export const EndGameSchema = z.object({

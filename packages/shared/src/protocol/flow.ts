@@ -76,6 +76,18 @@ export interface FlowState {
   /** A qualifying nomination awaits the Storyteller's execution confirmation. */
   executionPending: boolean;
   executedPlayerName: string | null;
+  /** The server's clock when this was built, so a countdown needs no offset maths. */
+  now: number;
+  /**
+   * Epoch ms before which no new player may be woken, or null when nobody is
+   * waiting. The pause between consecutive wakers exists so the table cannot time
+   * them — see the rulebook's note on the small wait at dawn.
+   */
+  wakeBlockedUntil: number | null;
+  /** The waker who has just finished and is being told to close their eyes. */
+  closingPlayerName: string | null;
+  /** The Storyteller's chosen pause between wakers, in seconds. */
+  delaySeconds: number;
 }
 
 export const EMPTY_FLOW_STATE: FlowState = {
@@ -96,6 +108,10 @@ export const EMPTY_FLOW_STATE: FlowState = {
   votingOpen: false,
   executionPending: false,
   executedPlayerName: null,
+  now: 0,
+  wakeBlockedUntil: null,
+  closingPlayerName: null,
+  delaySeconds: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -103,6 +119,7 @@ export const EMPTY_FLOW_STATE: FlowState = {
 // ---------------------------------------------------------------------------
 
 export interface StorytellerLine {
+  /** Client clock, so a countdown can be rendered without trusting a server offset. */
   /** What to say out loud. Safe to speak: public information only. */
   say: string;
   /** What to do on the device, in plain language. */
@@ -111,6 +128,8 @@ export interface StorytellerLine {
   canAdvance: boolean;
   /** How many steps through the night this is, for progress. */
   progress: string | null;
+  /** Client clock, so the countdown above can be rendered. */
+  now: number;
 }
 
 /**
@@ -128,6 +147,7 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
         action: 'Deal the roles when everyone has joined the table.',
         canAdvance: false,
         progress: null,
+        now: flow.now,
       };
     case 'night-briefing':
       return {
@@ -135,14 +155,33 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
         action: 'Nobody speaks, and nobody looks at a screen, until the first wake-up.',
         canAdvance: true,
         progress: 'Night briefing',
+        now: flow.now,
       };
     case 'night-step': {
+      // The pause between wakers. Saying "close your eyes" here is what tells the
+      // player who just acted that they are done, and it is the same beat the
+      // rulebook describes at dawn.
+      if (flow.closingPlayerName) {
+        const seconds = Math.max(0, Math.ceil(((flow.wakeBlockedUntil ?? 0) - flow.now) / 1000));
+        return {
+          say: `${flow.closingPlayerName}, close your eyes.`,
+          action:
+            seconds > 0
+              ? `Wait ${seconds}s before waking anyone, so the table cannot time the order. Skip the wait if you need to.`
+              : 'Wait a moment before waking anyone, so the table cannot time the order.',
+          canAdvance: true,
+          progress:
+            flow.totalSteps > 0 ? `${flow.resolvedCount} of ${flow.totalSteps} steps in` : 'Between wakers',
+          now: flow.now,
+        };
+      }
       if (flow.needsChoiceFromName) {
         return {
           say: `${flow.needsChoiceFromName}, wake up.`,
           action: 'Wait for them to submit their choice on their own screen. Nothing else is needed from you.',
           canAdvance: false,
           progress: `${flow.resolvedCount} of ${flow.totalSteps} steps in`,
+          now: flow.now,
         };
       }
       return {
@@ -150,6 +189,7 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
         action: 'Everyone is done. Resolve the night.',
         canAdvance: true,
         progress: `${flow.resolvedCount} of ${flow.totalSteps} steps in`,
+        now: flow.now,
       };
     }
     case 'night-resolving':
@@ -158,6 +198,7 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
         action: 'The night has been applied. Move to the day when the table is ready.',
         canAdvance: true,
         progress: 'Night resolved',
+        now: flow.now,
       };
     case 'day-reveal':
       return {
@@ -165,6 +206,7 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
         action: 'Give the table a moment to read who died, then start the day.',
         canAdvance: true,
         progress: `Day ${flow.dayNumber}`,
+        now: flow.now,
       };
     case 'day-voting':
       return {
@@ -174,6 +216,7 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
           : 'Close the vote when the table has decided.',
         canAdvance: flow.executionPending,
         progress: 'Voting',
+        now: flow.now,
       };
     case 'day-discussion':
       return {
@@ -181,6 +224,7 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
         action: 'Run the discussion. Open a nomination when someone wants one.',
         canAdvance: false,
         progress: `Day ${flow.dayNumber}`,
+        now: flow.now,
       };
     case 'ended':
       return {
@@ -188,6 +232,7 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
         action: 'Announce the result and talk the game out.',
         canAdvance: false,
         progress: null,
+        now: flow.now,
       };
     default:
       // A stage this build does not know about must not silently produce no

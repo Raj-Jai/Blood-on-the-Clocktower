@@ -16,10 +16,11 @@ import { sendToStoryteller } from './broadcast.js';
  * Grimoire entry. This object goes to every socket and, on the host device, gets
  * read aloud. See the leak invariant documented in shared/protocol/flow.ts.
  */
-export function buildFlowState(session: GameSession): FlowState {
+export function buildFlowState(session: GameSession, now: number = Date.now()): FlowState {
   const base = {
     dayNumber: session.dayNumber,
     nightNumber: session.nightNumber,
+    now,
     nominationId: session.nomination?.id ?? null,
     votingOpen: Boolean(session.nomination && !session.nomination.closed),
     executionPending: Boolean(session.nomination?.pendingExecution),
@@ -40,6 +41,9 @@ export function buildFlowState(session: GameSession): FlowState {
       resolvedCount: 0,
       readyToResolve: false,
       executedPlayerName: null,
+      wakeBlockedUntil: null,
+      closingPlayerName: null,
+      delaySeconds: 0,
     };
   }
 
@@ -58,11 +62,14 @@ export function buildFlowState(session: GameSession): FlowState {
       resolvedCount: 0,
       readyToResolve: false,
       executedPlayerName: null,
+      wakeBlockedUntil: null,
+      closingPlayerName: null,
+      delaySeconds: 0,
     };
   }
 
   if (session.phase === 'night') {
-    return buildNightFlow(session, base);
+    return buildNightFlow(session, base, now);
   }
 
   return buildDayFlow(session, base);
@@ -70,10 +77,10 @@ export function buildFlowState(session: GameSession): FlowState {
 
 type FlowBase = Pick<
   FlowState,
-  'dayNumber' | 'nightNumber' | 'nominationId' | 'votingOpen' | 'executionPending'
+  'dayNumber' | 'nightNumber' | 'nominationId' | 'votingOpen' | 'executionPending' | 'now'
 >;
 
-function buildNightFlow(session: GameSession, base: FlowBase): FlowState {
+function buildNightFlow(session: GameSession, base: FlowBase, now: number): FlowState {
   const night = session.currentNight;
 
   if (!night) {
@@ -91,6 +98,9 @@ function buildNightFlow(session: GameSession, base: FlowBase): FlowState {
       resolvedCount: 0,
       readyToResolve: true,
       executedPlayerName: null,
+      wakeBlockedUntil: null,
+      closingPlayerName: null,
+      delaySeconds: 0,
     };
   }
 
@@ -109,6 +119,9 @@ function buildNightFlow(session: GameSession, base: FlowBase): FlowState {
       resolvedCount: night.steps.length,
       readyToResolve: false,
       executedPlayerName: null,
+      wakeBlockedUntil: null,
+      closingPlayerName: null,
+      delaySeconds: night.delaySeconds,
     };
   }
 
@@ -172,24 +185,38 @@ function buildNightFlow(session: GameSession, base: FlowBase): FlowState {
       resolvedCount: 0,
       readyToResolve: order.every((step) => (step.targetCount ?? 0) === 0),
       executedPlayerName: null,
+      wakeBlockedUntil: null,
+      closingPlayerName: null,
+      delaySeconds: night.delaySeconds,
     };
   }
+
+  // The pause between consecutive wakers. While it runs, the table is told that
+  // the waker who just acted is going back to sleep, and NOBODY is told who is
+  // next until it expires — that is the whole point of the pause.
+  const gatePending = night.wakeGate !== null && now < night.wakeGate.opensAt;
+  const closingPlayer = gatePending ? session.players.get(night.wakeGate!.closesPlayerId) : undefined;
 
   return {
     ...base,
     stage: 'night-step',
     phase: 'night',
+    wakeBlockedUntil: gatePending ? night.wakeGate!.opensAt : null,
+    closingPlayerName: closingPlayer?.displayName ?? null,
+    delaySeconds: night.delaySeconds,
     // The spoken line names a person. Naming somebody is public in this game —
     // the real table shouts "Bram, wake up" — while their ROLE is not, and the
     // role is not in this string.
     // The spoken line names a person. Naming somebody is public in this game —
     // the real table shouts "Bram, wake up" — while their ROLE is not, and the
     // role is not in this string. See the leak guard in shared/protocol/flow.ts.
-    announcement: nextWakerPlayer
-      ? `${nextWakerPlayer.displayName}, wake up.`
-      : cursorWaker
-        ? `${cursorWaker.displayName}, close your eyes.`
-        : 'Everyone, close your eyes.',
+    announcement: gatePending
+      ? `${closingPlayer!.displayName}, close your eyes.`
+      : nextWakerPlayer
+        ? `${nextWakerPlayer.displayName}, wake up.`
+        : cursorWaker
+          ? `${cursorWaker.displayName}, close your eyes.`
+          : 'Everyone, close your eyes.',
     activePlayerId: nextWakerPlayer?.playerId ?? cursorWaker?.playerId ?? null,
     activePlayerName: nextWakerPlayer?.displayName ?? cursorWaker?.displayName ?? null,
     needsChoiceFromPlayerId: owedWaker?.playerId ?? null,
@@ -207,6 +234,7 @@ function buildDayFlow(session: GameSession, base: FlowBase): FlowState {
   const empty = {
     ...base,
     phase: 'day' as const,
+    now: base.now,
     activePlayerId: null,
     activePlayerName: null,
     needsChoiceFromPlayerId: null,
@@ -215,6 +243,9 @@ function buildDayFlow(session: GameSession, base: FlowBase): FlowState {
     totalSteps: 0,
     resolvedCount: 0,
     readyToResolve: false,
+    wakeBlockedUntil: null,
+    closingPlayerName: null,
+    delaySeconds: 0,
   };
 
   if (session.nomination && !session.nomination.closed) {
