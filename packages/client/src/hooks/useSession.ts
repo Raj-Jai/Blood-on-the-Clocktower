@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { Socket } from 'socket.io-client';
 import {
+  EMPTY_FLOW_STATE,
   ServerEvents,
   type ActiveNominationView,
   type AuthOkPayload,
   type DemonInheritedPayload,
   type DistributionPayload,
+  type FlowState,
   type ErrorPayload,
   type GameEndedPayload,
   type GamePhase,
@@ -66,6 +68,11 @@ export interface SessionState {
   nightOrder: NightOrderUpdatePayload | null;
   /** Storyteller-only: the auditable night log. */
   nightLog: NightLogEntryView[];
+  /**
+   * The public game flow — which stage the whole table is at, who is awake, and
+   * the one line that gets read aloud. Room-wide, and free of any private data.
+   */
+  flow: FlowState;
 }
 
 const initialState: SessionState = {
@@ -93,6 +100,7 @@ const initialState: SessionState = {
   nightResult: null,
   nightOrder: null,
   nightLog: [],
+  flow: EMPTY_FLOW_STATE,
 };
 
 export function useSession(socket: Socket | null): SessionState {
@@ -104,6 +112,7 @@ export function useSession(socket: Socket | null): SessionState {
     const onAuthOk = (payload: AuthOkPayload) => {
       setState((s) => ({
         ...s,
+        flow: EMPTY_FLOW_STATE,
         role: payload.role,
         phase: payload.phase,
         dayNumber: payload.dayNumber,
@@ -233,6 +242,11 @@ export function useSession(socket: Socket | null): SessionState {
     const onNightLog = (payload: { entries: NightLogEntryView[] }) => {
       setState((s) => (s.role === 'storyteller' ? { ...s, nightLog: payload.entries } : s));
     };
+    const onFlowUpdate = (payload: FlowState) => {
+      // Everyone gets the flow. It is public by construction — the server builds
+      // it from session state and never from a private payload.
+      setState((s) => ({ ...s, flow: payload }));
+    };
 
     socket.on(ServerEvents.AuthOk, onAuthOk);
     socket.on(ServerEvents.LobbyUpdate, onLobbyUpdate);
@@ -244,6 +258,7 @@ export function useSession(socket: Socket | null): SessionState {
     socket.on(ServerEvents.NightResolved, onNightResolved);
     socket.on(ServerEvents.NightOrderUpdate, onNightOrderUpdate);
     socket.on(ServerEvents.NightLog, onNightLog);
+    socket.on(ServerEvents.FlowUpdate, onFlowUpdate);
     socket.on(ServerEvents.NominationOpened, onNominationOpened);
     socket.on(ServerEvents.NominationVoteUpdate, onNominationVoteUpdate);
     socket.on(ServerEvents.NominationClosed, onNominationClosed);
@@ -269,6 +284,7 @@ export function useSession(socket: Socket | null): SessionState {
       socket.off(ServerEvents.NightResolved, onNightResolved);
       socket.off(ServerEvents.NightOrderUpdate, onNightOrderUpdate);
       socket.off(ServerEvents.NightLog, onNightLog);
+      socket.off(ServerEvents.FlowUpdate, onFlowUpdate);
       socket.off(ServerEvents.NominationOpened, onNominationOpened);
       socket.off(ServerEvents.NominationVoteUpdate, onNominationVoteUpdate);
       socket.off(ServerEvents.NominationClosed, onNominationClosed);

@@ -244,7 +244,7 @@ export function openNight(session: GameSession): NightState {
     overrideText: null,
   }));
 
-  session.currentNight = { steps, openedAt: Date.now(), activeIndex: 0, resolved: false };
+  session.currentNight = { steps, openedAt: Date.now(), activeIndex: 0, resolved: false, briefed: false };
   logNightEvent(
     session,
     'night-opened',
@@ -846,15 +846,53 @@ export function buildNightPrompt(session: GameSession, step: NightStep): NightPr
   };
 }
 
-/** Sends every waker their own prompt. Never uses a room broadcast. */
-export function sendNightPrompts(io: SocketIOServer, session: GameSession): void {
+/**
+ * Prompts the ONE player the flow says is awake.
+ *
+ * This used to prompt every waker the moment the night opened, which is wrong for
+ * a game that runs on waking people one at a time: three players were looking at
+ * their roles simultaneously, before the Storyteller had even said "close your
+ * eyes". A player only learns anything once the table says their name, and the
+ * flow names exactly one person, so exactly one person gets a prompt.
+ *
+ * It is re-evaluated on every flow change, which is also why the app never
+ * stalls: if the Storyteller forgets to click through, the next person in the
+ * order is prompted as soon as the previous one submits.
+ *
+ * Never a room broadcast — this is a private payload.
+ */
+export function sendActiveNightPrompt(io: SocketIOServer, session: GameSession): void {
+  const night = session.currentNight;
+  if (!night || night.resolved) return;
+  // During the briefing nobody is awake yet.
+  if (!night.briefed) return;
+
   for (const step of buildNightOrder(session)) {
-    const waker = session.players.get(step.wakerPlayerId);
-    if (!waker) continue;
-    const stored = findStoredStep(session.currentNight, step);
-    if (stored?.resolved) continue;
-    sendToPlayer(io, waker, ServerEvents.NightPrompt, buildNightPrompt(session, step));
+    const stored = findStoredStep(night, step);
+    if (!stored || stored.resolved) continue;
+    if ((step.targetCount ?? 0) === 0) continue;
+    const owed = firstPlayerOwingAChoice(session);
+    if (!owed || owed.playerId !== step.wakerPlayerId) continue;
+    sendToPlayer(io, owed, ServerEvents.NightPrompt, buildNightPrompt(session, step));
+    return;
   }
+}
+
+/**
+ * The first player, in official order, who still owes a choice. This is the same
+ * computation the flow uses to decide who the Storyteller should wake, so the
+ * prompt and the spoken line can never disagree about who is up.
+ */
+export function firstPlayerOwingAChoice(session: GameSession): PlayerRecord | null {
+  const night = session.currentNight;
+  if (!night || night.resolved) return null;
+  for (const step of buildNightOrder(session)) {
+    if ((step.targetCount ?? 0) === 0) continue;
+    const stored = findStoredStep(night, step);
+    if (!stored || stored.resolved) continue;
+    return session.players.get(step.wakerPlayerId) ?? null;
+  }
+  return null;
 }
 
 export function toNightOrderStepView(session: GameSession, step: NightStep): NightOrderStepView {

@@ -36,13 +36,14 @@ import { distributeRoles, resetDistribution, buildPlayerDistributionPayload } fr
 import { askQuestion, answerQuestion, resetQuestionQueue } from '../game/questions.js';
 import { resolveDemonKill } from '../game/demonKill.js';
 import { checkMayorWin, checkSaintExecution, checkWinCondition, endGame, tryScarletWomanTakeover } from '../game/winConditions.js';
+import { broadcastFlow, buildFlowState } from '../game/flow.js';
 import {
   endNight,
   openNight,
   resolveNight,
   sendNightLog,
   sendNightOrder,
-  sendNightPrompts,
+  sendActiveNightPrompt,
   submitNightChoice,
 } from '../game/nightEngine.js';
 import { broadcastGrimoire, broadcastLobby, buildGrimoire, sendError, sendToPlayer, sendToStoryteller, sessionRoom, STORYTELLER_SOCKET_KEY } from '../game/broadcast.js';
@@ -167,6 +168,7 @@ function sendQuestionQueueUpdates(io: SocketIOServer, session: GameSession): voi
 function broadcastGameEnded(io: SocketIOServer, session: GameSession, winner: WinningTeam, reason: GameEndReason): void {
   endGame(session, winner, reason);
   io.to(sessionRoom(session.code)).emit(ServerEvents.GameEnded, { winner, reason });
+  broadcastFlow(io, session);
 }
 
 /** Tells the Storyteller only that a Minion has secretly inherited the Demon role. Nobody else is informed by the server — the new Demon keeps playing as whatever they were already claiming to be. */
@@ -314,7 +316,8 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         broadcastDistribution(io, session);
         broadcastPhaseChanged(io, session);
         sendNightState(io, session);
-        sendNightPrompts(io, session);
+        sendActiveNightPrompt(io, session);
+        broadcastFlow(io, session);
         store.touch(session);
       })
     );
@@ -347,6 +350,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
           // Storyteller ends it. Incrementing from 0 would label the first day
           // "Day 2".
           session.dayNumber = session.dayNumber === 0 ? 1 : session.dayNumber + 1;
+          session.dayRevealed = false;
         } else {
           // Dusk. Opens the night: increments the night number, expires yesterday's
           // poison, re-arms the Soldier, and prompts every waker privately.
@@ -359,8 +363,9 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         broadcastGrimoire(io, session);
         sendQuestionQueueUpdates(io, session);
         sendNightState(io, session);
+        broadcastFlow(io, session);
         if (phase === 'night') {
-          sendNightPrompts(io, session);
+          sendActiveNightPrompt(io, session);
           // Waking players must not be left holding last night's private result.
           clearAbilityResults(io, session);
         }
@@ -418,6 +423,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
             handlePostDeath(io, session, deadId, wasDemon, report.inheritance ? 'self-killed' : 'night-kill');
           }
           sendNightState(io, session);
+          broadcastFlow(io, session);
           store.touch(session);
           return;
         }
@@ -430,8 +436,9 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         // Opening a night has to actually wake people: the prompt is the whole
         // point of the engine, so stepping into a night sends it here too rather
         // than only on the phase change.
-        sendNightPrompts(io, session);
+        sendActiveNightPrompt(io, session);
         sendNightState(io, session);
+        broadcastFlow(io, session);
         store.touch(session);
       })
     );
@@ -445,8 +452,45 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         // The waker identity is read from the step inside submitNightChoice, so a
         // player cannot submit on someone else's behalf even if they try.
         submitNightChoice(session, player.playerId, targetIds, io);
+        // Releasing the next waker here is what stops the table stalling: once a
+        // player has acted, whoever owes the next choice is prompted without the
+        // Storyteller having to click through the order.
+        sendActiveNightPrompt(io, session);
         sendNightState(io, session);
+        broadcastFlow(io, session);
         store.touch(session);
+      })
+    );
+
+    socket.on(ClientEvents.StorytellerFlowAdvance, () =>
+      guarded(io, socket, () => {
+        const session = requireStoryteller(socket);
+        const flow = buildFlowState(session);
+        // Two transitions are the Storyteller's to make by hand, because both are
+        // things they SAY rather than things the server can observe:
+        //   "everyone, close your eyes"  and  "everyone, open your eyes, it is day".
+        if (flow.stage === 'night-briefing' && session.currentNight) {
+          session.currentNight.briefed = true;
+          // Start on the first step that owes a choice, so the first wake-up line
+          // names somebody rather than a random cursor position.
+          sendNightState(io, session);
+          // Saying "everyone, close your eyes" is what ends the briefing, and it
+          // is what wakes the first player. Without this the night opened and
+          // nobody was ever prompted.
+          sendActiveNightPrompt(io, session);
+          broadcastFlow(io, session);
+          store.touch(session);
+          return;
+        }
+        if (flow.stage === 'day-reveal') {
+          session.dayRevealed = true;
+          broadcastFlow(io, session);
+          store.touch(session);
+          return;
+        }
+        // Everything else moves on its own (phase changes, resolutions, votes), so
+        // pressing advance there would be a no-op with no honest meaning.
+        throw Errors.flowNotAdvanceable();
       })
     );
 
@@ -548,6 +592,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         player.alive = false;
         broadcastGrimoire(io, session);
         broadcastLobby(io, session);
+        broadcastFlow(io, session);
         sendToPlayer(io, player, ServerEvents.PlayerSelfUpdate, { alive: false });
         const ended = handlePostDeath(io, session, playerId, wasDemon, 'executed');
         if (ended) broadcastGrimoire(io, session);
@@ -599,6 +644,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const { targetPlayerId } = NominateSchema.parse(raw);
         const nomination = nominate(session, player.playerId, targetPlayerId);
         io.to(sessionRoom(session.code)).emit(ServerEvents.NominationOpened, toNominationView(nomination));
+        broadcastFlow(io, session);
         store.touch(session);
       })
     );
@@ -621,6 +667,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const { nominationId } = CloseVoteSchema.parse(raw);
         const nomination = closeVote(session, nominationId);
         io.to(sessionRoom(session.code)).emit(ServerEvents.NominationClosed, toNominationView(nomination));
+        broadcastFlow(io, session);
         // A day that ends on a failed vote has had "no execution", which is one
         // of the Mayor's three conditions.
         const mayorWin = checkMayorWin(session);
@@ -638,6 +685,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         io.to(sessionRoom(session.code)).emit(ServerEvents.ExecutionConfirmed, { playerId: result.targetPlayerId });
         broadcastGrimoire(io, session);
         broadcastLobby(io, session);
+        broadcastFlow(io, session);
         // The Saint's own text: "If you die by execution, your team loses." This
         // is checked before the generic death sweep, because it outranks every
         // other condition — including the Demon's own death in the same vote,

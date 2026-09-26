@@ -92,6 +92,12 @@ export interface NightState {
   activeIndex: number;
   /** True once resolveNight has run for this night. */
   resolved: boolean;
+  /**
+   * True once the Storyteller has actually said "everyone, close your eyes".
+   * Tracked explicitly rather than derived, because that is an action they take,
+   * not a property of the state.
+   */
+  briefed: boolean;
 }
 
 export interface GameSession {
@@ -104,6 +110,8 @@ export interface GameSession {
   nightNumber: number;
   /** The night currently being woken, or null between phases. */
   currentNight: NightState | null;
+  /** True once the table has been sent to the Grimoire to see who died. */
+  dayRevealed: boolean;
   /** Append-only audit trail of every generated default, override, and night resolution. Storyteller-only. */
   log: NightLogEntry[];
   /** Per-game lie-policy config. 'sticky' is the default; see liePolicy.ts for the trade-off. */
@@ -176,6 +184,7 @@ export class SessionStore {
       dayNumber: 0,
       nightNumber: 0,
       currentNight: null,
+      dayRevealed: false,
       log: [],
       liePolicy: { consistency: 'sticky' },
       impHeirChoice: null,

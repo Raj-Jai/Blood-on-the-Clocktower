@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import { useAnnouncer } from '../hooks/useAnnouncer.js';
 import { ClientEvents } from '@clocktower/shared';
 import type { Socket } from 'socket.io-client';
 import type { SessionState } from '../hooks/useSession.js';
 import { GrimoireTable } from '../components/grimoire/GrimoireTable.js';
 import { NightOrderPanel } from '../components/grimoire/NightOrderPanel.js';
 import { NightDiscretionPanel } from '../components/grimoire/NightDiscretionPanel.js';
+import { StorytellerScript } from '../components/flow/StorytellerScript.js';
 import { EvilChatPanel } from '../components/chat/EvilChatPanel.js';
 import { OpenChatPanel } from '../components/chat/OpenChatPanel.js';
 import { ExecutionBanner } from '../components/shared/ExecutionBanner.js';
@@ -30,6 +32,8 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
   const [demonKillTarget, setDemonKillTarget] = useState('');
   const [confirmingEndGame, setConfirmingEndGame] = useState(false);
   const [dismissedInheritance, setDismissedInheritance] = useState(false);
+  // The host device doubles as the table's PA system for PUBLIC flow lines only.
+  const announcer = useAnnouncer();
 
   const grimoire = session.grimoire ?? [];
 
@@ -159,6 +163,15 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
       </div>
 
       <PhaseTimer phaseEndsAt={session.phaseEndsAt} phase={session.phase} />
+
+      <StorytellerScript
+        socket={socket}
+        flow={session.flow}
+        announcer={announcer}
+        nightResolved={Boolean(session.nightOrder?.resolved)}
+        readyToResolve={Boolean(session.nightOrder) && session.nightOrder!.outstandingCharacterIds.length === 0}
+        outstanding={session.nightOrder?.outstandingCharacterIds ?? []}
+      />
 
       {!gameEnded && (
         <div className="panel" style={{ borderColor: 'var(--evil-red)' }}>

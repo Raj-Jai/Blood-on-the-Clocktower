@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ClientEvents } from '@clocktower/shared';
 import type { Socket } from 'socket.io-client';
 import type { SessionState } from '../hooks/useSession.js';
@@ -17,6 +17,7 @@ import { PhaseTimer } from '../components/shared/PhaseTimer.js';
 import { QuestionQueuePanel } from '../components/questions/QuestionQueuePanel.js';
 import { RoleReferenceSection } from '../components/reference/RoleReferenceSection.js';
 import { NightPromptPanel } from '../components/grimoire/NightPromptPanel.js';
+import { TurnGuide } from '../components/flow/TurnGuide.js';
 import type { LobbyPlayer } from '../hooks/useSession.js';
 
 function SeatingCirclePanel({ players, selfPlayerId }: { players: LobbyPlayer[]; selfPlayerId: string }) {
@@ -65,6 +66,18 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
     }
   }
 
+  // The TurnGuide's buttons point at a tab without owning the tab state.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail === 'character' || detail === 'town' || detail === 'questions' || detail === 'discussion' || detail === 'chat') {
+        setTab(detail);
+      }
+    };
+    window.addEventListener('botc:goto-tab', handler);
+    return () => window.removeEventListener('botc:goto-tab', handler);
+  }, []);
+
   function sendChat(text: string) {
     socket?.emit(ClientEvents.ChatEvilSend, { text });
   }
@@ -85,6 +98,23 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
     <div className="app-shell">
       <ExecutionBanner playerId={session.lastExecutedPlayerId} eventId={session.executionEventId} displayName={executedName} />
       {session.gameResult && <GameEndedBanner result={session.gameResult} />}
+
+      <TurnGuide
+        socket={socket}
+        flow={session.flow}
+        context={{
+          playerId: selfPlayerId,
+          alive: session.alive,
+          hasOpenNightPrompt: Boolean(session.nightPrompt),
+          hasSubmittedNightChoice: Boolean(session.nightResult),
+          isEvil,
+        }}
+        hasOpenNightPrompt={Boolean(session.nightPrompt)}
+        speechEnabled={speech.enabled}
+        onToggleSpeech={speech.setEnabled}
+        speechSupported={speech.supported}
+        hostIsAnnouncing={false}
+      />
 
       <div className="panel" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
         <div>
@@ -108,7 +138,7 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
 
       <PhaseTimer phaseEndsAt={session.phaseEndsAt} phase={session.phase} />
 
-      {hasNightActivity && (
+      {hasNightActivity && tab === 'character' && (
         <NightPromptPanel
           socket={socket}
           prompt={session.nightPrompt}

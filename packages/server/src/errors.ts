@@ -77,6 +77,12 @@ export const Errors = {
   illegalTarget: (name: string) =>
     new ClocktowerError('ILLEGAL_TARGET', `${name} is not a legal choice for your character.`, 422),
   playerNotInGame: () => new ClocktowerError('PLAYER_NOT_FOUND', "That player isn't in this game.", 404),
+  flowNotAdvanceable: () =>
+    new ClocktowerError(
+      'FLOW_NOT_ADVANCEABLE',
+      "The flow moves on its own right now — switch phases, resolve the night, or close the vote.",
+      409
+    ),
   butlerMustFollow: () =>
     new ClocktowerError('BUTLER_MUST_FOLLOW', "You're the Butler: you may only vote if the player you chose is voting too.", 403),
 };

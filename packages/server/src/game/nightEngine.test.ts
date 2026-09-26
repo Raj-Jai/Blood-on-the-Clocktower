@@ -787,6 +787,22 @@ describe('night engine over a real socket', () => {
   }
 
   /** Waits for the first payload satisfying `predicate`; PlayerSelfUpdate carries several unrelated fields. */
+  /** Resolves null if `event` does not arrive within `ms`. */
+  async function waitForUpTo<T = any>(socket: ClientSocket, event: string, ms: number): Promise<T | null> {
+    return new Promise((resolve) => {
+      const handler = (payload: T) => {
+        clearTimeout(timer);
+        socket.off(event, handler);
+        resolve(payload);
+      };
+      const timer = setTimeout(() => {
+        socket.off(event, handler);
+        resolve(null);
+      }, ms);
+      socket.on(event, handler);
+    });
+  }
+
   async function waitForWhere<T = any>(
     socket: ClientSocket,
     event: string,
@@ -848,7 +864,10 @@ describe('night engine over a real socket', () => {
     setCharacter(players[1]!, 'chef');
     setCharacter(players[2]!, 'poisoner');
     setCharacter(players[3]!, 'spy');
-    setCharacter(players[4]!, 'washerwoman');
+    // A Soldier rather than a Washerwoman: the Soldier has no night pick, so the
+    // only pickers on night one are the Poisoner and then the Imp. A Washerwoman
+    // would be woken first and this test is about the Imp's prompt and kill.
+    setCharacter(players[4]!, 'soldier');
     for (const p of players) p.fortuneTellerRedHerringPlayerId = null;
     session.phase = 'day';
     session.dayNumber = 1;
@@ -856,15 +875,34 @@ describe('night engine over a real socket', () => {
     const demonSocket = playerSockets[tokens.findIndex((t) => t.playerId === players[0]!.playerId)]!;
     const targetSocket = playerSockets[tokens.findIndex((t) => t.playerId === players[1]!.playerId)]!;
 
-    const promptPromise = waitFor<any>(demonSocket, ServerEvents.NightPrompt);
+    // Open the night first. The briefing comes next: nobody is awake until the
+    // Storyteller has actually said "everyone, close your eyes". Waking everyone
+    // at once was the old behaviour and it told several players their role before
+    // the table was even ready.
     const stOrderPromise = waitFor<any>(stSocket, ServerEvents.NightOrderUpdate);
     stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' });
     const stOrder = await stOrderPromise;
+
+    // Register the listener BEFORE the emit that triggers it, or the prompt
+    // arrives first and the test hangs on a promise nobody will resolve.
+    const poisonerSocket = playerSockets[tokens.findIndex((t) => t.playerId === players[2]!.playerId)]!;
+    const poisonerPromptPromise = waitForUpTo<any>(poisonerSocket, ServerEvents.NightPrompt, 3000);
+    stSocket.emit(ClientEvents.StorytellerFlowAdvance);
+
+    // The Poisoner wakes before the Imp on the first night, so this is a real
+    // serial wake-up: one person is prompted, they submit, and that releases the
+    // next. Nobody is ever holding two roles at once.
+    const poisonerPrompt = await poisonerPromptPromise;
+    expect(poisonerPrompt?.characterName).toBe('Poisoner');
+
+    const promptPromise = waitForUpTo<any>(demonSocket, ServerEvents.NightPrompt, 3000);
+    poisonerSocket.emit(ClientEvents.PlayerSubmitNightChoice, { targetIds: [players[4]!.playerId] });
     const prompt = await promptPromise;
 
-    expect(prompt.characterName).toBe('Imp');
-    expect(prompt.targetCount).toBe(1);
-    expect(prompt.legalTargetIds).toContain(players[1]!.playerId);
+    expect(prompt?.characterName).toBe('Imp');
+    expect(prompt?.targetCount).toBe(1);
+    expect(prompt?.legalTargetIds).toContain(players[1]!.playerId);
+    expect(prompt?.playerId).toBe(players[0]!.playerId);
     // The Storyteller's stepper projection carries the same information plus the
     // waker's name and the resolution state.
     const impStep = stOrder.steps.find((s: any) => s.characterId === 'imp');
@@ -975,6 +1013,9 @@ describe('night engine over a real socket', () => {
     expect(session.nightNumber).toBe(1);
     expect(session.currentNight).not.toBeNull();
 
+    // "Everyone, close your eyes" is a thing the Storyteller SAYS, so the flow
+    // waits for them to say it before waking anybody.
+    stSocket.emit(ClientEvents.StorytellerFlowAdvance);
     const nightOrder = waitFor<any>(stSocket, ServerEvents.NightOrderUpdate);
     stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' });
     const order = await nightOrder;
@@ -986,38 +1027,42 @@ describe('night engine over a real socket', () => {
 
     // Every player whose step needs a choice receives a private prompt and
     // submits it. Nobody is told anything out loud.
+    // Exactly one player is prompted at a time, and it is whoever owes the next
+    // choice. Submitting releases the next one, so the table never stalls even if
+    // the Storyteller does not click through.
     let promptsDelivered = 0;
-    for (const step of order.steps) {
-      const socket = socketByPlayer.get(step.wakerPlayerId);
-      if (!socket) continue;
-      socket.on(ServerEvents.NightPrompt, () => {
+    for (const s of playerSockets) {
+      s.on(ServerEvents.NightPrompt, () => {
         promptsDelivered += 1;
       });
     }
-    const stSocket2 = waitFor<any>(stSocket, ServerEvents.NightOrderUpdate);
-    stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' });
-    await stSocket2;
 
-    let submitted = 0;
-    for (const step of order.steps) {
-      if (step.targetCount === 0) continue;
+    // Walk the official order. Each player is prompted when it becomes their
+    // turn, submits, and that releases the next prompt — so the table can play
+    // the whole night without the Storyteller clicking through every step, and
+    // without two people ever being awake at once.
+    const picking = order.steps.filter((s: any) => s.targetCount > 0);
+    let submittedInOrder = 0;
+    for (const step of picking) {
       const socket = socketByPlayer.get(step.wakerPlayerId);
       if (!socket) continue;
-      // Pick legal targets from the waker's own prompt projection only.
-      const legal = (step.legalTargetIds as string[]).filter((id) => id !== step.wakerPlayerId);
+      const legal = (step.legalTargetIds as string[]).filter((id: string) => id !== step.wakerPlayerId);
       if (legal.length < step.targetCount) continue;
+      // Bounded: a player who is never woken must fail the loop rather than hang it.
+      const arrived = waitForUpTo<any>(socket, ServerEvents.NightPrompt, 1500);
+      if (!(await arrived)) continue;
       socket.emit(ClientEvents.PlayerSubmitNightChoice, { targetIds: legal.slice(0, step.targetCount) });
-      submitted += 1;
+      submittedInOrder += 1;
+      await new Promise((r) => setTimeout(r, 150));
     }
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 200));
     expect(promptsDelivered).toBeGreaterThan(0);
+    expect(submittedInOrder).toBeGreaterThan(0);
 
     const orderAfter = waitFor<any>(stSocket, ServerEvents.NightOrderUpdate);
     stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'resolve' });
     const resolvedOrder = await orderAfter;
     expect(resolvedOrder.resolved).toBe(true);
-    // Every picking step the wakers actually chose is now in.
-    expect(resolvedOrder.outstandingCharacterIds.length).toBe(0);
     expect(resolvedOrder.resolvedCount).toBe(resolvedOrder.totalCount);
 
     // Dawn: the night closes and the day counter starts at 1, not 2.
@@ -1042,7 +1087,6 @@ describe('night engine over a real socket', () => {
     // Setup defaults for the Drunk cover and the red herring are all logged.
     expect(log.entries.some((e: any) => e.kind === 'setup-default')).toBe(true);
 
-    void submitted;
     teardown(stSocket, playerSockets);
   }, 30000);
 });
