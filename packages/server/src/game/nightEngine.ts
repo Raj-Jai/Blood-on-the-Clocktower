@@ -322,6 +322,7 @@ export function openNight(session: GameSession): NightState {
     steps,
     openedAt: Date.now(),
     activeIndex: 0,
+    wakeIndex: 0,
     resolved: false,
     briefed: false,
     // Read from the previous night when the Storyteller set it, so the pause
@@ -1020,28 +1021,112 @@ export function pendingWakerNames(session: GameSession): string[] {
 }
 
 /**
+ * The waker currently being dealt with, or null when the night is done.
+ *
+ * THE SINGLE SOURCE OF TRUTH FOR THE WAKE WALK. It used to be derived from the
+ * Storyteller's stepper cursor, and that was the bug: clicking "next" quickly
+ * marked every auto-resolving waker before the cursor as dealt with in a single
+ * sweep, so the Empath and the Chef were skipped without ever being announced —
+ * and each click overwrote the pause, so the table heard "Win1, close your eyes"
+ * immediately followed by "Phone, close your eyes". One cursor, advanced one waker
+ * at a time, cannot do that.
+ */
+export function currentWakeStep(session: GameSession): NightStep | null {
+  const night = session.currentNight;
+  if (!night || night.resolved) return null;
+  const order = buildNightOrder(session);
+  if (order.length === 0) return null;
+  const index = Math.max(0, Math.min(night.wakeIndex, order.length - 1));
+  const step = order[index]!;
+  const stored = findStoredStep(night, step);
+  if (stored?.resolved) {
+    // Everything at or before the cursor is dealt with; the next unresolved step
+    // is the one who is awake. This keeps the walk self-healing after a
+    // Storyteller jump, rather than stalling on an already-resolved step.
+    const next = order.find((s) => {
+      const st = findStoredStep(night, s);
+      return st && !st.resolved;
+    });
+    return next ?? null;
+  }
+  return step;
+}
+
+/** The player who is awake right now, or null. */
+export function currentWaker(session: GameSession): PlayerRecord | null {
+  const step = currentWakeStep(session);
+  if (!step) return null;
+  return session.players.get(step.wakerPlayerId) ?? null;
+}
+
+/**
  * Records that a waker has finished, and opens the pause before the next one.
  *
  * THE PAUSE IS A RULE, NOT A POLISH DETAIL. The rulebook says of dawn: "The
  * small wait at dawn prevents players from knowing for sure whether they were the
  * last to act at night." That reasoning applies to every gap in the night, not
- * just the last one. Announce "X, wake up" the instant X's turn ends and the
- * table learns the exact timing of every wake — and timing is how players work
- * out who acted before the Demon did.
+ * just the last one. Announce "X, wake up" the instant X's turn ends and the table
+ * learns the exact timing of every wake — and timing is how players work out who
+ * acted before the Demon did.
  *
  * While the gate is open the flow says "X, close your eyes" and no new prompt is
  * sent, so the next person is not announced until the pause has elapsed.
+ *
+ * Idempotent for the same player: pressing "next" twice while the pause is running
+ * must not re-open the gate on somebody else, which is what made two "close your
+ * eyes" announcements fire back to back.
  */
 export function finishWake(session: GameSession, playerId: string): void {
   const night = session.currentNight;
   if (!night || night.resolved) return;
+
+  // Mark this waker dealt with, so the walk moves on past them.
+  const step = buildNightOrder(session).find((s) => s.wakerPlayerId === playerId);
+  if (step) {
+    const stored = findStoredStep(night, step);
+    if (stored && !stored.resolved) {
+      if ((step.targetCount ?? 0) > 0 && step.isPossible && stored.targetIds.length === 0) {
+        // The Storyteller is moving on before this player submitted. Allowed — a
+        // table has to be able to continue when somebody walks away — but logged,
+        // because the ability will resolve as doing nothing.
+        logNightEvent(
+          session,
+          'advanced-without-choice',
+          `The Storyteller moved past ${step.characterId} (${session.players.get(playerId)?.displayName ?? playerId}) before they submitted.`
+        );
+      }
+      stored.resolved = true;
+    }
+  }
+
   if (night.delaySeconds <= 0) {
     night.wakeGate = null;
-    markPassedAutoSteps(session);
+    advanceWakeCursor(session);
     return;
   }
+  // A pause is ALREADY running, so leave its original deadline alone. Re-opening it
+  // on a different person is what made the table hear "Win1, close your eyes"
+  // immediately followed by "Phone, close your eyes" — two different people
+  // closing their eyes at once, with the walk jumping ahead of the pause.
+  if (night.wakeGate) return;
   night.wakeGate = { closesPlayerId: playerId, opensAt: Date.now() + night.delaySeconds * 1000 };
-  markPassedAutoSteps(session);
+}
+
+/** Moves the wake cursor to the first waker who has not been dealt with yet. */
+export function advanceWakeCursor(session: GameSession): void {
+  const night = session.currentNight;
+  if (!night) return;
+  // The walk must not move while a pause is running: the pause is the gap that
+  // stops the table timing the order, and jumping the cursor during it would put
+  // the next name on the wire before the gap had elapsed.
+  if (wakeGateIsPending(session)) return;
+  const order = buildNightOrder(session);
+  const next = order.findIndex((s) => {
+    const stored = findStoredStep(night, s);
+    return stored && !stored.resolved;
+  });
+  night.wakeIndex = next === -1 ? Math.max(0, order.length - 1) : next;
+  if (next === -1) night.wakeIndex = order.length;
 }
 
 /** Closes the pause immediately. The Storyteller's "skip the wait" control. */
@@ -1049,12 +1134,13 @@ export function skipWakeGate(session: GameSession): void {
   const night = session.currentNight;
   if (!night?.wakeGate) return;
   night.wakeGate = null;
-  markPassedAutoSteps(session);
+  advanceWakeCursor(session);
 }
 
 /**
- * Closes the pause if it has elapsed. Returns true when the flow changed and the
- * caller should re-prompt and re-broadcast.
+ * Closes the pause if it has elapsed, and moves the walk on to the next waker.
+ * Returns true when the flow changed and the caller should re-prompt and
+ * re-broadcast.
  *
  * `now` is a parameter so tests can drive the clock instead of sleeping.
  */
@@ -1063,7 +1149,7 @@ export function tickNightGate(session: GameSession, now: number = Date.now()): b
   if (!night?.wakeGate) return false;
   if (now < night.wakeGate.opensAt) return false;
   night.wakeGate = null;
-  markPassedAutoSteps(session);
+  advanceWakeCursor(session);
   return true;
 }
 
@@ -1074,48 +1160,12 @@ export function wakeGateIsPending(session: GameSession, now: number = Date.now()
   return now < night.wakeGate.opensAt;
 }
 
-/**
- * Marks auto-resolving steps the Storyteller's cursor has walked past as dealt
- * with.
- *
- * A character with no night pick — the Chef, the Empath, the Undertaker, the Spy —
- * still wakes: their name is called, they are given their information, and they
- * go back to sleep. There is nothing for them to submit, so the step stays open
- * forever and the wake walk can never reach the people after them. Marking them
- * as the cursor passes is what lets the flow announce EVERY waker in the official
- * order rather than only the ones who make a choice.
- *
- * Their actual information is still delivered by `resolveNight` at dawn, which is
- * when the engine applies the night. This only records that the wake-up happened.
- */
-export function markPassedAutoSteps(session: GameSession): void {
-  const night = session.currentNight;
-  if (!night) return;
-  const order = buildNightOrder(session);
-  for (let i = 0; i < night.activeIndex && i < order.length; i++) {
-    const step = order[i]!;
-    if ((step.targetCount ?? 0) > 0) continue;
-    const stored = findStoredStep(night, step);
-    if (stored && !stored.resolved) stored.resolved = true;
-  }
-}
-
-/**
- * The first player, in official order, who still owes a choice. This is the same
- * computation the flow uses to decide who the Storyteller should wake, so the
- * prompt and the spoken line can never disagree about who is up.
- */
 export function firstPlayerOwingAChoice(session: GameSession): PlayerRecord | null {
-  const night = session.currentNight;
-  if (!night || night.resolved) return null;
-  for (const step of buildNightOrder(session)) {
-    if ((step.targetCount ?? 0) === 0) continue;
-    if (!step.isPossible) continue;
-    const stored = findStoredStep(night, step);
-    if (!stored || stored.resolved) continue;
-    return session.players.get(step.wakerPlayerId) ?? null;
-  }
-  return null;
+  const step = currentWakeStep(session);
+  if (!step) return null;
+  if ((step.targetCount ?? 0) === 0) return null;
+  if (!step.isPossible) return null;
+  return session.players.get(step.wakerPlayerId) ?? null;
 }
 
 export function toNightOrderStepView(session: GameSession, step: NightStep): NightOrderStepView {
@@ -1130,7 +1180,9 @@ export function toNightOrderStepView(session: GameSession, step: NightStep): Nig
     wakerName: waker?.displayName ?? 'unknown',
     order: step.order,
     isFirstNight: step.isFirstNight,
-    resolved: stored?.resolved ?? false,
+    // An unmakeable step is shown as dealt with, because it is: there is nothing
+    // for its player to do and nothing for the Storyteller to wait for.
+    resolved: (stored?.resolved ?? false) || !step.isPossible,
     targetCount: step.targetCount,
     targetIds: stored?.targetIds ?? [],
     targetNames: (stored?.targetIds ?? []).map((id) => nameOfPlayer(session, id)),
@@ -1159,7 +1211,9 @@ export function toNightOrderUpdate(session: GameSession): NightOrderUpdatePayloa
     resolvedCount: steps.filter((s) => s.resolved).length,
     totalCount: steps.length,
     openedAt: night?.openedAt ?? null,
-    outstandingCharacterIds: steps.filter((s) => s.targetCount > 0 && !s.resolved).map((s) => s.characterName),
+    // Excludes unmakeable steps. Listing one as outstanding is what makes the
+    // night look like it is waiting on a player who can never act.
+    outstandingCharacterIds: steps.filter((s) => s.targetCount > 0 && !s.resolved && s.isPossible).map((s) => s.characterName),
     resolved: night?.resolved ?? false,
   };
 }

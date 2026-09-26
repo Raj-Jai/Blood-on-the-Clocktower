@@ -1,7 +1,7 @@
 import type { Server as SocketIOServer } from 'socket.io';
 import { ServerEvents, getCharacterById, type FlowState } from '@clocktower/shared';
 import type { GameSession } from '../session/store.js';
-import { buildNightOrder, markPassedAutoSteps } from './nightEngine.js';
+import { buildNightOrder, currentWakeStep, wakeGateIsPending } from './nightEngine.js';
 import { sendToStoryteller } from './broadcast.js';
 
 /**
@@ -107,6 +107,42 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
     };
   }
 
+  const order = buildNightOrder(session);
+  const unmakeable = order.filter((s) => (s.targetCount ?? 0) > 0 && !s.isPossible);
+  const describeUnmakeable = (s: { characterId: string; unavailableReason: string | null }): {
+    characterName: string;
+    reason: string;
+  } => ({
+    characterName: getCharacterById(s.characterId)?.name ?? s.characterId,
+    reason: s.unavailableReason ?? 'there is nobody to choose',
+  });
+
+  // "Everyone, close your eyes" is an ACTION, not a derivation. It is tracked
+  // explicitly so the table stays in the briefing until the Storyteller has
+  // actually said it, rather than flipping the instant the night opens. Nobody is
+  // woken, and no prompt goes out, until then.
+  if (!night.briefed) {
+    return {
+      ...base,
+      stage: 'night-briefing',
+      phase: 'night',
+      announcement: 'Everyone, close your eyes.',
+      activePlayerId: null,
+      activePlayerName: null,
+      needsChoiceFromPlayerId: null,
+      needsChoiceFromName: null,
+      stepNumber: null,
+      totalSteps: order.length,
+      resolvedCount: 0,
+      readyToResolve: order.every((s) => (s.targetCount ?? 0) === 0 || !s.isPossible),
+      executedPlayerName: null,
+      wakeBlockedUntil: null,
+      closingPlayerName: null,
+      delaySeconds: night.delaySeconds,
+      unmakeableSteps: unmakeable.map(describeUnmakeable),
+    };
+  }
+
   if (night.resolved) {
     return {
       ...base,
@@ -129,115 +165,53 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
     };
   }
 
-  const order = buildNightOrder(session);
-  // EVERY waker, not just the ones who make a choice.
-  //
-  // The official Glossary defines a wake as a player opening their eyes, and the
-  // whole table hears their name called. That makes "who woke tonight" usable
-  // public information — a Chef who woke is a Chef who is alive — so announcing
-  // only the pickers silently swallowed real information. The Chef and the
-  // Empath are woken, given a number and put back to sleep exactly like anyone
-  // else, and the table is entitled to hear it.
-  //
-  // A step counts as not-yet-announced until it is resolved. Auto-resolving steps
-  // are marked resolved as the Storyteller's cursor walks past them, since there
-  // is nothing for their player to do (see markPassedAutoSteps).
-  const pending = order.filter((step) => {
-    const stored = night.steps.find((s) => s.wakerPlayerId === step.wakerPlayerId && s.characterId === step.characterId);
-    return stored && !stored.resolved;
-  });
-  // Steps that cannot be made at all. They still wake and are still announced —
-  // "the Librarian woke" is information the table is entitled to — but they are
-  // never waited on, because waiting for a choice that cannot exist is the
-  // deadlock this whole concept exists to prevent.
-  const unmakeable = order.filter((s) => (s.targetCount ?? 0) > 0 && !s.isPossible);
-  const awaitable = pending.filter((s) => (s.targetCount ?? 0) === 0 || s.isPossible);
+  // The wake walk is driven by ONE explicit cursor (NightState.wakeIndex), not by
+  // the Storyteller's stepper. The stepper is presentation; letting it drive the
+  // walk is what skipped the Empath and the Chef entirely when the Storyteller
+  // clicked through quickly.
+  const currentStep = currentWakeStep(session);
+  const currentPlayer = currentStep ? session.players.get(currentStep.wakerPlayerId) : undefined;
+  const cursorIndex = currentStep ? order.findIndex((s) => s === currentStep) : -1;
 
-  // The Storyteller's cursor decides who is "up" — that is the person they are
-  // talking to, which is exactly what the real game does.
-  const cursorIndex = Math.max(0, Math.min(night.activeIndex, Math.max(0, order.length - 1)));
-  const cursorStep = order[cursorIndex];
-  const cursorWaker = cursorStep ? session.players.get(cursorStep.wakerPlayerId) : undefined;
-
-  // The person to ANNOUNCE is the first waker in official order who has not been
-  // dealt with yet, preferring whoever the cursor is on so clicking "next" wakes
-  // who the Storyteller clicked on.
-  const pickers = awaitable.filter((s) => (s.targetCount ?? 0) > 0);
-  const nextWaker =
-    cursorStep && pending.some((s) => s.wakerPlayerId === cursorStep.wakerPlayerId && s.characterId === cursorStep.characterId)
-      ? cursorStep
-      : pending[0];
-  const nextWakerPlayer = nextWaker ? session.players.get(nextWaker.wakerPlayerId) : undefined;
-
-  // Who needs a private prompt: only the pickers. An auto-resolving character has
-  // no choice to submit, so prompting them would show a picker with nothing to
-  // pick — their answer arrives at dawn, when the engine resolves the night.
-  const owed = pickers[0];
-  const owedWaker = owed ? session.players.get(owed.wakerPlayerId) : undefined;
+  // Who needs a private prompt: only the current waker, and only if they actually
+  // have a choice to make. An auto-resolving character has nothing to submit, so
+  // prompting them would show a picker with nothing in it — their answer arrives
+  // at dawn, when the engine resolves the night.
+  const owedWaker =
+    currentStep && (currentStep.targetCount ?? 0) > 0 && currentStep.isPossible ? (currentPlayer ?? null) : null;
 
   const resolvedCount = night.steps.filter((s) => s.resolved).length;
 
-  // "Everyone, close your eyes" is an ACTION, not a derivation. It is tracked
-  // explicitly so the table stays in the briefing until the Storyteller has
-  // actually said it, rather than flipping the instant the night opens.
-  if (!night.briefed) {
-    return {
-      ...base,
-      stage: 'night-briefing',
-      phase: 'night',
-      announcement: 'Everyone, close your eyes.',
-      activePlayerId: null,
-      activePlayerName: null,
-      needsChoiceFromPlayerId: null,
-      needsChoiceFromName: null,
-      stepNumber: null,
-      totalSteps: order.length,
-      resolvedCount: 0,
-      readyToResolve: order.every((s) => (s.targetCount ?? 0) === 0 || !s.isPossible),
-      executedPlayerName: null,
-      wakeBlockedUntil: null,
-      closingPlayerName: null,
-      delaySeconds: night.delaySeconds,
-      unmakeableSteps: order
-        .filter((s) => (s.targetCount ?? 0) > 0 && !s.isPossible)
-        .map((s) => ({
-          characterName: getCharacterById(s.characterId)?.name ?? s.characterId,
-          reason: s.unavailableReason ?? 'there is nobody to choose',
-        })),
-    };
-  }
+  // Everything still to be dealt with. An unmakeable step is excluded, because it
+  // can never be satisfied and counting it would mean the night never resolves.
+  const awaitable = order.filter((s) => {
+    const stored = night.steps.find((x) => x.wakerPlayerId === s.wakerPlayerId && x.characterId === s.characterId);
+    return stored && !stored.resolved && ((s.targetCount ?? 0) === 0 || s.isPossible);
+  });
 
-  // The pause between consecutive wakers. While it runs, the table is told that
-  // the waker who just acted is going back to sleep, and NOBODY is told who is
-  // next until it expires — that is the whole point of the pause.
-  const gatePending = night.wakeGate !== null && now < night.wakeGate.opensAt;
-  const closingPlayer = gatePending ? session.players.get(night.wakeGate!.closesPlayerId) : undefined;
+  const gatePending = wakeGateIsPending(session, now);
+  const closingPlayer = gatePending && night.wakeGate ? session.players.get(night.wakeGate.closesPlayerId) : undefined;
 
   return {
     ...base,
     stage: 'night-step',
     phase: 'night',
-    wakeBlockedUntil: gatePending ? night.wakeGate!.opensAt : null,
+    wakeBlockedUntil: gatePending && night.wakeGate ? night.wakeGate.opensAt : null,
     closingPlayerName: closingPlayer?.displayName ?? null,
     delaySeconds: night.delaySeconds,
     // The spoken line names a person. Naming somebody is public in this game —
     // the real table shouts "Bram, wake up" — while their ROLE is not, and the
-    // role is not in this string.
-    // The spoken line names a person. Naming somebody is public in this game —
-    // the real table shouts "Bram, wake up" — while their ROLE is not, and the
     // role is not in this string. See the leak guard in shared/protocol/flow.ts.
     announcement: gatePending
-      ? `${closingPlayer!.displayName}, close your eyes.`
-      : nextWakerPlayer
-        ? `${nextWakerPlayer.displayName}, wake up.`
-        : cursorWaker
-          ? `${cursorWaker.displayName}, close your eyes.`
-          : 'Everyone, close your eyes.',
-    activePlayerId: nextWakerPlayer?.playerId ?? cursorWaker?.playerId ?? null,
-    activePlayerName: nextWakerPlayer?.displayName ?? cursorWaker?.displayName ?? null,
+      ? `${closingPlayer?.displayName ?? 'Everyone'}, close your eyes.`
+      : currentPlayer
+        ? `${currentPlayer.displayName}, wake up.`
+        : 'Everyone, close your eyes.',
+    activePlayerId: currentPlayer?.playerId ?? null,
+    activePlayerName: currentPlayer?.displayName ?? null,
     needsChoiceFromPlayerId: owedWaker?.playerId ?? null,
     needsChoiceFromName: owedWaker?.displayName ?? null,
-    stepNumber: cursorIndex + 1,
+    stepNumber: cursorIndex >= 0 ? cursorIndex + 1 : null,
     totalSteps: order.length,
     resolvedCount,
     // Every picker who CAN choose has chosen, and every auto waker has been passed.

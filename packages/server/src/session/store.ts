@@ -88,8 +88,19 @@ export interface NightStepState {
 export interface NightState {
   steps: NightStepState[];
   openedAt: number;
-  /** Step the Storyteller's stepper is pointing at. Presentation only. */
+  /**
+   * Step the Storyteller's stepper is pointing at. PRESENTATION ONLY — it must
+   * never drive who is awake, because clicking it fast used to mark every
+   * auto-resolving waker before the cursor as dealt with in one go, silently
+   * skipping their wake-ups entirely.
+   */
   activeIndex: number;
+  /**
+   * The waker currently being dealt with. THE single source of truth for the wake
+   * walk, separate from the stepper cursor for exactly that reason. Advances by
+   * one when the pause between wakers expires, or when the Storyteller overrides.
+   */
+  wakeIndex: number;
   /** True once resolveNight has run for this night. */
   resolved: boolean;
   /**

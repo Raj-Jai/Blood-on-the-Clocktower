@@ -42,7 +42,7 @@ import {
   buildNightOrder,
   endNight,
   finishWake,
-  markPassedAutoSteps,
+  currentWaker,
   openNight,
   resolveNight,
   sendActiveNightPrompt,
@@ -50,6 +50,7 @@ import {
   sendNightOrder,
   skipWakeGate,
   submitNightChoice,
+  wakeGateIsPending,
 } from '../game/nightEngine.js';
 import { broadcastGrimoire, broadcastLobby, buildGrimoire, sendError, sendToPlayer, sendToStoryteller, sessionRoom, STORYTELLER_SOCKET_KEY } from '../game/broadcast.js';
 import { castVote, closeVote, confirmExecution, nominate, resetForNewDay, toNominationView } from '../game/rules.js';
@@ -442,34 +443,44 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
           return;
         }
 
-        // Stepping forward past a waker starts the same pause a submission does,
-        // so an auto-resolving character is waited on in exactly the same way.
-        // Read it BEFORE the cursor moves. Only a waker who is actually finished
-        // opens a pause — stepping past somebody who still owes a choice is a
-        // Storyteller mistake, and pausing on them would announce the wrong name.
-        let steppingPast: string | null = null;
+        // "Next" means "I have dealt with the person who is awake". It never
+        // advances more than one waker, and it never touches the wake walk
+        // directly — the pause does that when it expires. A single cursor means a
+        // Storyteller clicking quickly can no longer skip the Empath or the Chef.
         if (action === 'next') {
-          const current = buildNightOrder(session)[night.activeIndex];
-          if (current) {
-            const stored = night.steps.find(
-              (s) => s.wakerPlayerId === current.wakerPlayerId && s.characterId === current.characterId
-            );
-            const finished = (current.targetCount ?? 0) === 0 || stored?.resolved === true;
-            if (finished) steppingPast = current.wakerPlayerId;
+          // Nothing can be dealt with before the Storyteller has said "everyone,
+          // close your eyes". Without this the very first click skipped the first
+          // waker of the night entirely.
+          // While a pause is running there is nobody new to deal with, so a click
+          // is a no-op. The Storyteller has a "skip the wait" control for when the
+          // table wants to move faster.
+          if (night.briefed && !wakeGateIsPending(session)) {
+            const awake = currentWaker(session);
+            // Only deal with somebody who is FINISHED: either their character has
+            // nothing to choose, or they have already submitted. Clicking past a
+            // player who still owes a choice silently skipped their whole night
+            // step, which is the same class of bug as skipping an auto-resolving
+            // character. A table that needs to move on resolves the night instead,
+            // which reports the missing choice rather than hiding it.
+            const step = buildNightOrder(session).find((x) => x.wakerPlayerId === awake?.playerId);
+            const stored = step
+              ? night.steps.find((x) => x.wakerPlayerId === step.wakerPlayerId && x.characterId === step.characterId)
+              : undefined;
+            const finished = (step?.targetCount ?? 0) === 0 || (stored?.targetIds.length ?? 0) > 0;
+            if (awake && finished) {
+              finishWake(session, awake.playerId);
+              // Keep the stepper in step with the wake walk for the panel's benefit.
+              night.activeIndex = night.wakeIndex;
+            }
           }
+        } else if (action === 'previous') {
+          night.activeIndex -= 1;
+        } else if (action === 'goto' && stepIndex !== undefined) {
+          night.activeIndex = stepIndex;
         }
-
-        if (action === 'next') night.activeIndex += 1;
-        else if (action === 'previous') night.activeIndex -= 1;
-        else if (action === 'goto' && stepIndex !== undefined) night.activeIndex = stepIndex;
         const last = Math.max(0, night.steps.length - 1);
         night.activeIndex = Math.max(0, Math.min(night.activeIndex, last));
-        // Characters with no night pick (Chef, Empath, Undertaker, Spy) still
-        // wake and are still called by name — the table is entitled to hear it,
-        // because "the Chef woke" is information that the Chef is alive. Marking
-        // them as the cursor passes is what lets the wake walk reach everyone.
-        markPassedAutoSteps(session);
-        if (steppingPast) finishWake(session, steppingPast);
+
         sendActiveNightPrompt(io, session);
         sendNightState(io, session);
         broadcastFlow(io, session);
