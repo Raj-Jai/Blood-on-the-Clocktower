@@ -67,6 +67,12 @@ export const Errors = {
   nightChoiceAlreadySubmitted: () =>
     new ClocktowerError('NIGHT_CHOICE_ALREADY_SUBMITTED', "You've already sent your choice for tonight.", 403),
   nothingToChoose: () => new ClocktowerError('NOTHING_TO_CHOOSE', "Your character doesn't make a choice tonight.", 400),
+  nothingToChooseForCharacter: (name: string, reason: string) =>
+    new ClocktowerError(
+      'NOTHING_TO_CHOOSE_FOR_CHARACTER',
+      `${name} has no valid choice tonight: ${reason}. There is nothing to pick.`,
+      422
+    ),
   wrongTargetCount: (expected: number, got: number) =>
     new ClocktowerError(
       'WRONG_TARGET_COUNT',

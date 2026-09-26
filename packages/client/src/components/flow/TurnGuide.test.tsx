@@ -19,6 +19,7 @@ function renderGuide(flowState: FlowState, ctx: Record<string, unknown> = {}, ha
         hasOpenNightPrompt,
         hasSubmittedNightChoice: false,
         isEvil: false,
+        stepIsUnmakeable: false,
         ...ctx,
       }}
       hasOpenNightPrompt={hasOpenNightPrompt}
@@ -134,6 +135,7 @@ describe('TurnGuide', () => {
           hasOpenNightPrompt: false,
           hasSubmittedNightChoice: false,
           isEvil: false,
+          stepIsUnmakeable: false,
         }}
         hasOpenNightPrompt={false}
         speechEnabled={false}
@@ -157,6 +159,7 @@ describe('TurnGuide', () => {
           hasOpenNightPrompt: false,
           hasSubmittedNightChoice: false,
           isEvil: false,
+          stepIsUnmakeable: false,
         }}
         hasOpenNightPrompt={false}
         speechEnabled={false}

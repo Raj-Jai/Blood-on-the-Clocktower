@@ -10,6 +10,8 @@ import { createApp } from '../http/app.js';
 import {
   buildNightOrder,
   endNight,
+  firstPlayerOwingAChoice,
+  markPassedAutoSteps,
   openNight,
   pendingStepsForPlayer,
   resolveNight,
@@ -20,6 +22,7 @@ import { chefEvilPairCount, empathEvilNeighbourCount, perceivedAs, slayerWouldKi
 import { resolveDemonKill } from './demonKill.js';
 import { buildPlayerDistributionPayload } from './distribution.js';
 import { checkMayorWin, checkSaintExecution } from './winConditions.js';
+import { buildFlowState } from './flow.js';
 import {
   chooseStickyRegistration,
   deliverNightInfo,
@@ -313,6 +316,105 @@ describe('deferred night steps', () => {
     // resolveNight marks even an unsubmitted step as resolved (as "did nothing"),
     // so the refusal lands on whichever guard fires first. Both are correct.
     expect(() => submitNightChoice(session, players[1]!.playerId, [players[2]!.playerId])).toThrow(/already/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+// A picking ability can be satisfied by NOBODY, and when that happens the step
+// used to deadlock the table: an empty picker the player cannot submit, never
+// marked resolved, so the night could never reach "ready to resolve".
+describe('a step with no legal target', () => {
+  function noOutsiderSession() {
+    // Trouble Brewing deals ZERO Outsiders at 5 and 7 players. If the Librarian is
+    // the one Outsider dealt, the other four are Townsfolk and a Demon — so the
+    // Librarian has nobody of their own type to look at.
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'librarian');
+    setCharacter(players[1]!, 'imp');
+    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[3]!, 'chef');
+    setCharacter(players[4]!, 'empath');
+    session.phase = 'night';
+    session.nightNumber = 0;
+    openNight(session);
+    session.currentNight!.briefed = true;
+    return { session, players };
+  }
+
+  it('is reported as unmakeable rather than as a step waiting on a player', () => {
+    const { session, players } = noOutsiderSession();
+    const step = buildNightOrder(session).find((s) => s.characterId === 'librarian')!;
+    expect(step.isPossible).toBe(false);
+    expect(step.legalTargetIds).toEqual([]);
+    expect(step.unavailableReason).toMatch(/no Outsiders in play/i);
+    // Crucially NOT outstanding: nothing is going to arrive.
+    expect(buildFlowState(session).unmakeableSteps).toEqual([
+      { characterName: 'Librarian', reason: expect.stringMatching(/no Outsiders in play/i) },
+    ]);
+  });
+
+  it('does not deadlock the night: it is ready to resolve once the others have', () => {
+    const { session, players } = noOutsiderSession();
+    expect(buildFlowState(session).readyToResolve).toBe(false); // the Poisoner still owes a choice
+    submitNightChoice(session, players[2]!.playerId, [players[3]!.playerId]);
+    session.currentNight!.activeIndex = session.currentNight!.steps.length;
+    markPassedAutoSteps(session);
+    submitNightChoice(session, players[1]!.playerId, [players[3]!.playerId]);
+    expect(buildFlowState(session).readyToResolve).toBe(true);
+  });
+
+  it('rejects a submission with a message that says there is nothing to pick', () => {
+    const { session, players } = noOutsiderSession();
+    expect(() => submitNightChoice(session, players[0]!.playerId, [players[3]!.playerId])).toThrow(
+      /no valid choice tonight/i
+    );
+  });
+
+  it('never prompts the player with an empty picker', () => {
+    const { session, players } = noOutsiderSession();
+    // Only the player who owes a CHOICE is ever prompted, and the Librarian is not
+    // one of them, so no prompt goes out for a step that cannot be filled in.
+    expect(firstPlayerOwingAChoice(session)?.playerId).not.toBe(players[0]!.playerId);
+  });
+
+  it('resolves the Librarian as a real answer, not a failure', () => {
+    // "(Or that zero are in play.)" is written into their own ability text, so
+    // zero Outsiders is a legitimate RESULT. A real Storyteller just says so.
+    const { session, players } = noOutsiderSession();
+    submitNightChoice(session, players[2]!.playerId, [players[3]!.playerId]);
+    session.currentNight!.activeIndex = session.currentNight!.steps.length;
+    markPassedAutoSteps(session);
+    submitNightChoice(session, players[1]!.playerId, [players[3]!.playerId]);
+
+    const report = resolveNight(session, null as never);
+    // Not outstanding: it resolved, it did not time out.
+    expect(report.outstanding).toEqual([]);
+    const entry = session.log.find((e) => e.kind === 'unmakeable-choice');
+    expect(entry?.detail).toMatch(/Librarian \(Player0\)/);
+    // The player is told the answer their ability text promises, not an error.
+    const told = session.log.filter((e) => e.kind === 'info-generated' && e.detail.startsWith('Librarian'));
+    expect(told.length).toBeGreaterThan(0);
+    expect(told.some((e) => e.detail.includes('no Outsiders in play'))).toBe(true);
+  });
+
+  it('a Washerwoman who is the only Townsfolk also cannot choose', () => {
+    // Reachable at 5 players with the Baron's +2 Outsiders: 1 Townsfolk, 2
+    // Outsiders, 1 Minion, 1 Demon.
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'washerwoman');
+    setCharacter(players[1]!, 'baron');
+    setCharacter(players[2]!, 'recluse');
+    setCharacter(players[3]!, 'saint');
+    setCharacter(players[4]!, 'imp');
+    session.phase = 'night';
+    session.nightNumber = 0;
+    openNight(session);
+    const step = buildNightOrder(session).find((s) => s.characterId === 'washerwoman')!;
+    expect(step.isPossible).toBe(false);
+    expect(step.unavailableReason).toMatch(/no other Townsfolk/i);
+    // And it does not become a silent hang: the flow knows about it.
+    expect(buildFlowState(session).unmakeableSteps.some((u) => u.characterName === 'Washerwoman')).toBe(true);
   });
 });
 

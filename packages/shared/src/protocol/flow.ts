@@ -68,8 +68,14 @@ export interface FlowState {
   stepNumber: number | null;
   totalSteps: number;
   resolvedCount: number;
-  /** Every choice is in, so the engine can resolve. */
+  /**
+   * Every choice that CAN be made has been made, so the engine can resolve. A
+   * picking step with no legal target is not outstanding — it is unmakeable, and
+   * waiting for it would deadlock the night.
+   */
   readyToResolve: boolean;
+  /** Steps that cannot be made at all, with the reason. Storyteller-facing. */
+  unmakeableSteps: { characterName: string; reason: string }[];
   nominationId: string | null;
   /** The nomination is open and votes are being cast. */
   votingOpen: boolean;
@@ -104,6 +110,7 @@ export const EMPTY_FLOW_STATE: FlowState = {
   totalSteps: 0,
   resolvedCount: 0,
   readyToResolve: false,
+  unmakeableSteps: [],
   nominationId: null,
   votingOpen: false,
   executionPending: false,
@@ -250,6 +257,8 @@ export interface PlayerFlowContext {
   alive: boolean;
   /** The player has a night prompt open and owes a choice. */
   hasOpenNightPrompt: boolean;
+  /** This player's step cannot be made at all (a Librarian with no Outsider in play). */
+  stepIsUnmakeable: boolean;
   /** The player already sent their choice for this night. */
   hasSubmittedNightChoice: boolean;
   /** The player is Evil and the Evil chat is theirs to use. */
@@ -302,6 +311,16 @@ export function derivePlayerInstruction(flow: FlowState, ctx: PlayerFlowContext)
   }
 
   if (flow.stage === 'night-step' || flow.stage === 'night-resolving') {
+    // A step that cannot be made must never be presented as a choice, or the
+    // player stares at an empty picker and a Send button that never enables.
+    if (ctx.stepIsUnmakeable) {
+      return {
+        title: 'Close your eyes.',
+        detail: 'Your character has nobody to choose tonight. The Storyteller will tell you what you learn.',
+        action: 'wait',
+        tone: 'sleep',
+      };
+    }
     // "You are awake" keys off TWO signals, and deliberately not off
     // `activePlayerId`. That field is the Storyteller's cursor — a presentation
     // detail for their stepper — and it can point at somebody who has already

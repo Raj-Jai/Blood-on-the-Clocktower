@@ -115,9 +115,11 @@ export function NightOrderPanel({ socket, nightOrder, nightLog }: NightOrderPane
                 )}
                 {step.targetCount > 0 && (
                   <div className="faint" style={{ fontSize: '0.85rem' }}>
-                    {step.resolved
-                      ? `Chose: ${step.targetNames.join(' and ') || 'nothing'}`
-                      : `Waiting on a choice from ${step.wakerName} (${step.targetCount} to pick from ${step.legalTargetNames.length} legal)`}
+                    {!step.isPossible
+                      ? step.unavailableReason
+                      : step.resolved
+                        ? `Chose: ${step.targetNames.join(' and ') || 'nothing'}`
+                        : `Waiting on a choice from ${step.wakerName} (${step.targetCount} to pick from ${step.legalTargetNames.length} legal)`}
                   </div>
                 )}
                 {step.overrideText && <div className="faint">Override queued: “{step.overrideText}”</div>}

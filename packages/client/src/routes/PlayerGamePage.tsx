@@ -55,6 +55,9 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
   const canVote = session.phase === 'day' && !session.nomination?.closed && !gameEnded;
   const showAbilityResult = Boolean(session.abilityResult) && session.abilityResult !== dismissedResult;
   const hasNightActivity = Boolean(session.nightPrompt) || Boolean(session.nightResult);
+  // A step with no legal target is never prompted, so this is normally false; the
+  // flag keeps the guide from telling someone to go pick when there is nobody to pick.
+  const stepIsUnmakeable = session.flow.unmakeableSteps.length > 0;
 
   function nominate(targetPlayerId: string) {
     socket?.emit(ClientEvents.PlayerNominate, { targetPlayerId });
@@ -108,6 +111,9 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
           hasOpenNightPrompt: Boolean(session.nightPrompt),
           hasSubmittedNightChoice: Boolean(session.nightResult),
           isEvil,
+          stepIsUnmakeable:
+            distribution?.role === 'player' &&
+            session.flow.unmakeableSteps.some((u) => u.characterName === distribution.characterName),
         }}
         hasOpenNightPrompt={Boolean(session.nightPrompt)}
         speechEnabled={speech.enabled}

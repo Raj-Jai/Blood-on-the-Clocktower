@@ -3,6 +3,7 @@ import {
   ServerEvents,
   getCharacterById,
   type CharacterDefinition,
+  type InfoTruth,
   type InfoType,
   type NightLogPayload,
   type NightOrderStepView,
@@ -86,6 +87,9 @@ export interface NightStep {
   /** Legal targets for a picking step, precomputed. */
   legalTargetIds?: string[];
   targetCount: number;
+  /** False when there are too few legal targets for the choice to be made at all. */
+  isPossible: boolean;
+  unavailableReason: string | null;
   prompt?: string;
   infoType: InfoType;
 }
@@ -161,6 +165,75 @@ export function buildNightOrder(session: GameSession): NightStep[] {
   );
 }
 
+/**
+ * Can this waker actually make their choice tonight?
+ *
+ * A picking ability can be satisfied by nobody. The Librarian needs an Outsider
+ * to look at, and Trouble Brewing deals ZERO Outsiders at 5 and 7 players — so a
+ * table that somehow has a Librarian in play has a step that can never be
+ * submitted. A Washerwoman who is the only Townsfolk (5 players with the Baron's
+ * +2 Outsiders) is the same shape.
+ *
+ * Left unhandled this is a hard deadlock: the picker renders with no buttons, the
+ * Send button never enables, the step is never "outstanding", and the night can
+ * never reach "ready to resolve" — so the table sits there forever.
+ *
+ * So an unmakeable step is a distinct state, not a missing one. It still wakes
+ * and is still announced by name, because "the Librarian woke" is information the
+ * table is entitled to. It just resolves as the rules say it does.
+ */
+export function stepAvailability(
+  session: GameSession,
+  waker: PlayerRecord,
+  def: CharacterDefinition
+): { isPossible: boolean; reason: string | null; legalTargetIds: string[] } {
+  const targetCount = def.targetCount ?? 0;
+  if (targetCount === 0) {
+    return { isPossible: true, reason: null, legalTargetIds: [] };
+  }
+  const legal = legalTargetsFor(session, waker, def, { isDrunk: isDrunkCover(session, waker) }).map((p) => p.playerId);
+  if (legal.length >= targetCount) {
+    return { isPossible: true, reason: null, legalTargetIds: legal };
+  }
+  return { isPossible: false, reason: unmakeableReason(def, legal.length, targetCount), legalTargetIds: legal };
+}
+
+function unmakeableReason(def: CharacterDefinition, have: number, need: number): string {
+  if (def.id === 'librarian') {
+    return 'There are no Outsiders in play, so there is nobody to choose. The Librarian learns that instead.';
+  }
+  if (def.id === 'investigator') {
+    return 'There are no Minions in play, so there is nobody to choose.';
+  }
+  if (def.id === 'washerwoman') {
+    return 'There is no other Townsfolk in play, so there is nobody to choose.';
+  }
+  if (def.id === 'butler') {
+    return 'There is no other Townsfolk in play, so there is nobody to choose.';
+  }
+  if (def.id === 'monk') {
+    return 'There is no other Good player to protect, so the ability does nothing.';
+  }
+  return `Only ${have} legal target${have === 1 ? '' : 's'} for a choice of ${need}, so the ability cannot be used.`;
+}
+
+/**
+ * What an unmakeable step actually resolves to.
+ *
+ * The Librarian is the special case because it is written into their own ability
+ * text: "You start knowing that 1 of 2 players is a particular Outsider. (Or that
+ * zero are in play.)" Zero Outsiders is a legitimate ANSWER, not a failure, and a
+ * real Storyteller simply tells them so. Everything else that cannot be chosen
+ * simply does nothing, which is what happens at a real table when an ability has
+ * no valid target.
+ */
+function unmakeableResult(def: CharacterDefinition): { text: string; truth: InfoTruth } {
+  if (def.id === 'librarian') {
+    return { text: 'You learn that there are no Outsiders in play.', truth: 'TRUE' };
+  }
+  return { text: 'Your ability does nothing tonight — there was nobody to choose.', truth: 'TRUE' };
+}
+
 function buildStep(
   session: GameSession,
   player: PlayerRecord,
@@ -169,8 +242,7 @@ function buildStep(
   isFirstNight: boolean
 ): NightStep {
   const targetCount = def.targetCount ?? 0;
-  const legalTargets =
-    targetCount > 0 ? legalTargetsFor(session, player, def, { isDrunk: isDrunkCover(session, player) }) : [];
+  const availability = stepAvailability(session, player, def);
   return {
     characterId: def.id,
     order,
@@ -178,7 +250,9 @@ function buildStep(
     isFirstNight,
     resolved: false,
     targetCount,
-    legalTargetIds: targetCount > 0 ? legalTargets.map((p) => p.playerId) : undefined,
+    legalTargetIds: targetCount > 0 ? availability.legalTargetIds : undefined,
+    isPossible: availability.isPossible,
+    unavailableReason: availability.reason,
     prompt: def.nightPrompt,
     infoType: def.infoType ?? 'none',
   };
@@ -340,6 +414,11 @@ export function submitNightChoice(
   const targetCount = def.targetCount ?? 0;
   if (targetCount === 0) throw Errors.nothingToChoose();
 
+  const availability = stepAvailability(session, waker, def);
+  if (!availability.isPossible) {
+    throw Errors.nothingToChooseForCharacter(def.name, availability.reason ?? 'there is nobody to choose');
+  }
+
   if (targetIds.length !== targetCount) {
     throw Errors.wrongTargetCount(targetCount, targetIds.length);
   }
@@ -427,6 +506,29 @@ export function resolveNight(session: GameSession, io: SocketIOServer): NightRes
     if (!waker) continue;
     const def = getCharacterById(step.characterId);
     if (!def) continue;
+
+    // An unmakeable step is not "outstanding": it can never be satisfied, and
+    // treating it as outstanding is what deadlocked the table. The Librarian's own
+    // text covers the zero-Outsider case, so it resolves as a real answer.
+    if ((def.targetCount ?? 0) > 0 && !step.isPossible) {
+      const outcome = unmakeableResult(def);
+      logNightEvent(
+        session,
+        'unmakeable-choice',
+        `${def.name} (${waker.displayName}): ${step.unavailableReason}`
+      );
+      // Log what they were actually TOLD as well as why. The night log is meant to
+      // be a complete record of every piece of information delivered, and an entry
+      // that records the reason but not the answer would be a gap in that record.
+      logNightEvent(
+        session,
+        'info-generated',
+        `${def.name} (${waker.displayName}) told: ${outcome.text} [truth=${outcome.truth}] Ability had no legal target, so this is the rules-correct outcome rather than a generated answer.`
+      );
+      stored.resolved = true;
+      sendResolved(session, io, waker, def, stored, outcome.text, undefined);
+      continue;
+    }
 
     if ((def.targetCount ?? 0) > 0 && stored.targetIds.length === 0) {
       report.outstanding.push(def.name);
@@ -721,6 +823,8 @@ function appendRavenkeeperWake(session: GameSession, io: SocketIOServer, report:
         isFirstNight: isFirstNightOf(session),
         resolved: false,
         targetCount: def.targetCount ?? 1,
+        isPossible: true,
+        unavailableReason: null,
         legalTargetIds: legalTargetsFor(session, player, def).map((p) => p.playerId),
         prompt: def.nightPrompt,
         infoType: def.infoType ?? 'character',
@@ -886,6 +990,10 @@ export function sendActiveNightPrompt(io: SocketIOServer, session: GameSession):
     const stored = findStoredStep(night, step);
     if (!stored || stored.resolved) continue;
     if ((step.targetCount ?? 0) === 0) continue;
+    // Never hand a player a picker they cannot fill in. An unmakeable step still
+    // wakes and is still announced by name; it just gets no prompt, and its result
+    // is the rules-correct "there is nobody to choose".
+    if (!step.isPossible) continue;
     const owed = firstPlayerOwingAChoice(session);
     if (!owed || owed.playerId !== step.wakerPlayerId) continue;
     sendToPlayer(io, owed, ServerEvents.NightPrompt, buildNightPrompt(session, step));
@@ -1002,6 +1110,7 @@ export function firstPlayerOwingAChoice(session: GameSession): PlayerRecord | nu
   if (!night || night.resolved) return null;
   for (const step of buildNightOrder(session)) {
     if ((step.targetCount ?? 0) === 0) continue;
+    if (!step.isPossible) continue;
     const stored = findStoredStep(night, step);
     if (!stored || stored.resolved) continue;
     return session.players.get(step.wakerPlayerId) ?? null;
@@ -1031,6 +1140,8 @@ export function toNightOrderStepView(session: GameSession, step: NightStep): Nig
     prompt: step.prompt ?? null,
     infoType: step.infoType,
     isDrunkCover: waker ? isDrunkCover(session, waker) : false,
+    isPossible: step.isPossible,
+    unavailableReason: step.unavailableReason,
     overrideText: stored?.overrideText ?? null,
   };
 }

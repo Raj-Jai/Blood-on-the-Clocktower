@@ -46,6 +46,7 @@ function contextFor(playerId: string, overrides: Partial<PlayerFlowContext> = {}
     hasOpenNightPrompt: false,
     hasSubmittedNightChoice: false,
     isEvil: false,
+    stepIsUnmakeable: false,
     ...overrides,
   };
 }

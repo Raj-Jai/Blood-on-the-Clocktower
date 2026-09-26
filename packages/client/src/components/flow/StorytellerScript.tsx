@@ -110,6 +110,23 @@ export function StorytellerScript({
       </div>
 
       <p style={{ marginTop: 12, marginBottom: 0 }}>{line.action}</p>
+      {flow.unmakeableSteps.length > 0 && (
+        <div
+          style={{
+            marginTop: 12,
+            padding: '8px 12px',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-void)',
+            border: '1px solid var(--border-subtle)',
+          }}
+        >
+          {flow.unmakeableSteps.map((u) => (
+            <p key={u.characterName} style={{ margin: 0, fontSize: '0.9rem' }}>
+              <strong>{u.characterName}:</strong> {u.reason}
+            </p>
+          ))}
+        </div>
+      )}
       {flow.stage === 'night-step' && flow.delaySeconds === 0 && (
         <p className="faint" style={{ marginTop: 8 }}>
           No pause between wakers is set, so the table can time the wake order.

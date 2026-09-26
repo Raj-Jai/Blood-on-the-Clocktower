@@ -1,5 +1,5 @@
 import type { Server as SocketIOServer } from 'socket.io';
-import { ServerEvents, type FlowState } from '@clocktower/shared';
+import { ServerEvents, getCharacterById, type FlowState } from '@clocktower/shared';
 import type { GameSession } from '../session/store.js';
 import { buildNightOrder, markPassedAutoSteps } from './nightEngine.js';
 import { sendToStoryteller } from './broadcast.js';
@@ -44,6 +44,7 @@ export function buildFlowState(session: GameSession, now: number = Date.now()): 
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: 0,
+      unmakeableSteps: [],
     };
   }
 
@@ -65,6 +66,7 @@ export function buildFlowState(session: GameSession, now: number = Date.now()): 
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: 0,
+      unmakeableSteps: [],
     };
   }
 
@@ -101,6 +103,7 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: 0,
+      unmakeableSteps: [],
     };
   }
 
@@ -122,6 +125,7 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: night.delaySeconds,
+      unmakeableSteps: [],
     };
   }
 
@@ -142,6 +146,12 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
     const stored = night.steps.find((s) => s.wakerPlayerId === step.wakerPlayerId && s.characterId === step.characterId);
     return stored && !stored.resolved;
   });
+  // Steps that cannot be made at all. They still wake and are still announced —
+  // "the Librarian woke" is information the table is entitled to — but they are
+  // never waited on, because waiting for a choice that cannot exist is the
+  // deadlock this whole concept exists to prevent.
+  const unmakeable = order.filter((s) => (s.targetCount ?? 0) > 0 && !s.isPossible);
+  const awaitable = pending.filter((s) => (s.targetCount ?? 0) === 0 || s.isPossible);
 
   // The Storyteller's cursor decides who is "up" — that is the person they are
   // talking to, which is exactly what the real game does.
@@ -152,7 +162,7 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
   // The person to ANNOUNCE is the first waker in official order who has not been
   // dealt with yet, preferring whoever the cursor is on so clicking "next" wakes
   // who the Storyteller clicked on.
-  const pickers = pending.filter((s) => (s.targetCount ?? 0) > 0);
+  const pickers = awaitable.filter((s) => (s.targetCount ?? 0) > 0);
   const nextWaker =
     cursorStep && pending.some((s) => s.wakerPlayerId === cursorStep.wakerPlayerId && s.characterId === cursorStep.characterId)
       ? cursorStep
@@ -183,11 +193,17 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
       stepNumber: null,
       totalSteps: order.length,
       resolvedCount: 0,
-      readyToResolve: order.every((step) => (step.targetCount ?? 0) === 0),
+      readyToResolve: order.every((s) => (s.targetCount ?? 0) === 0 || !s.isPossible),
       executedPlayerName: null,
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: night.delaySeconds,
+      unmakeableSteps: order
+        .filter((s) => (s.targetCount ?? 0) > 0 && !s.isPossible)
+        .map((s) => ({
+          characterName: getCharacterById(s.characterId)?.name ?? s.characterId,
+          reason: s.unavailableReason ?? 'there is nobody to choose',
+        })),
     };
   }
 
@@ -224,8 +240,14 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
     stepNumber: cursorIndex + 1,
     totalSteps: order.length,
     resolvedCount,
-    // Everything dealt with: every picker has submitted and every auto waker has been passed.
-    readyToResolve: pending.length === 0,
+    // Every picker who CAN choose has chosen, and every auto waker has been passed.
+    // Unmakeable steps are excluded: they can never be satisfied, so counting them
+    // would mean the night could never be resolved.
+    readyToResolve: awaitable.length === 0,
+    unmakeableSteps: unmakeable.map((s) => ({
+      characterName: getCharacterById(s.characterId)?.name ?? s.characterId,
+      reason: s.unavailableReason ?? 'there is nobody to choose',
+    })),
     executedPlayerName: null,
   };
 }
@@ -246,6 +268,7 @@ function buildDayFlow(session: GameSession, base: FlowBase): FlowState {
     wakeBlockedUntil: null,
     closingPlayerName: null,
     delaySeconds: 0,
+    unmakeableSteps: [],
   };
 
   if (session.nomination && !session.nomination.closed) {

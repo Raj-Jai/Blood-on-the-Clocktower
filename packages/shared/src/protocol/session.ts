@@ -225,6 +225,15 @@ export interface NightOrderStepView {
   infoType: InfoType;
   /** True when the waker is a Drunk and this step runs under their cover character. */
   isDrunkCover: boolean;
+  /**
+   * False when there are not enough legal targets for this character to make
+   * their choice at all — a Librarian with no Outsider in play, a Washerwoman who
+   * is the only Townsfolk. The step still wakes and is still announced by name;
+   * it just cannot be submitted, and it resolves as the rules say it does.
+   */
+  isPossible: boolean;
+  /** Plain-English reason, for the Storyteller and the night log. */
+  unavailableReason: string | null;
   /** Free-text result the Storyteller supplied via the discretion panel, if any. */
   overrideText: string | null;
 }
