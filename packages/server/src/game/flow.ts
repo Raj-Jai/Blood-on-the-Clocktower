@@ -1,7 +1,13 @@
 import type { Server as SocketIOServer } from 'socket.io';
 import { ServerEvents, getCharacterById, type FlowState } from '@clocktower/shared';
 import type { GameSession } from '../session/store.js';
-import { buildNightOrder, currentWakeStep, wakeGateIsPending } from './nightEngine.js';
+import {
+  buildNightOrder,
+  currentWakeStep,
+  findStoredStep,
+  stepCountsAsOutstanding,
+  wakeGateIsPending,
+} from './nightEngine.js';
 import { sendToStoryteller } from './broadcast.js';
 
 /**
@@ -143,7 +149,12 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
     };
   }
 
-  if (night.resolved) {
+  // `passComplete`, not `resolved`: this branch is the night being OVER, not the
+  // night being ready. `resolved` is re-derived from the outstanding steps, so it
+  // becomes true the moment the last picker submits — before the Storyteller has
+  // pressed resolve — and using it here would announce "it is morning" before
+  // anything had happened.
+  if (night.passComplete) {
     return {
       ...base,
       stage: 'night-resolving',
@@ -180,14 +191,27 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
   const owedWaker =
     currentStep && (currentStep.targetCount ?? 0) > 0 && currentStep.isPossible ? (currentPlayer ?? null) : null;
 
-  const resolvedCount = night.steps.filter((s) => s.resolved).length;
+  // Everything still to be dealt with, by the one shared rule. Auto-resolving and
+  // unmakeable steps are excluded, because waiting on them would deadlock.
+  const outstanding = order.filter((s) => stepCountsAsOutstanding(session, s));
 
-  // Everything still to be dealt with. An unmakeable step is excluded, because it
-  // can never be satisfied and counting it would mean the night never resolves.
-  const awaitable = order.filter((s) => {
-    const stored = night.steps.find((x) => x.wakerPlayerId === s.wakerPlayerId && x.characterId === s.characterId);
-    return stored && !stored.resolved && ((s.targetCount ?? 0) === 0 || s.isPossible);
-  });
+  // The progress counter and the night-level "resolved" flag are the same
+  // statement counted two ways, so they can never disagree. Before this, a night
+  // could be flagged resolved while this counter said 3 of 4.
+  const resolvedCount = order.length - outstanding.length;
+
+  // AWAITABLE is a different question from OUTSTANDING, and conflating them is
+  // what let a night finish early or hang forever:
+  //
+  // - awaitable: is the Storyteller still holding the night open? An auto-resolving
+  //   waker (Empath, Chef) is awaitable even though it has nothing to submit,
+  //   because the table still has to be told to pass them. An unmakeable step is
+  //   not awaitable, because nobody can ever pass it.
+  // - outstanding: can the night finish? Auto-resolving and unmakeable steps are
+  //   both excluded, since waiting on them would deadlock.
+  const awaitable = order.filter(
+    (s) => !findStoredStep(night, s)?.resolved && ((s.targetCount ?? 0) === 0 || s.isPossible)
+  );
 
   const gatePending = wakeGateIsPending(session, now);
   const closingPlayer = gatePending && night.wakeGate ? session.players.get(night.wakeGate.closesPlayerId) : undefined;

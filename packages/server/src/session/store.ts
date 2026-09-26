@@ -101,8 +101,23 @@ export interface NightState {
    * one when the pause between wakers expires, or when the Storyteller overrides.
    */
   wakeIndex: number;
-  /** True once resolveNight has run for this night. */
+  /**
+   * Nothing is outstanding: every step that could be submitted has been, and the
+   * ones that cannot be (auto-resolving, unmakeable) do not count. Re-derived from
+   * the steps whenever one changes, so it can never contradict the order view.
+   */
   resolved: boolean;
+  /**
+   * The resolution pass (resolveNight) has run.
+   *
+   * Deliberately NOT the same as `resolved`. A Ravenkeeper woken by the night kill
+   * means the pass is done while the night is still not finished, so these cannot
+   * be one boolean. Before they were split, `resolved` had to mean both, and the
+   * engine could report a night as complete while a player still owed a choice.
+   * This is what locks the stepper, guards late submissions, and routes a deferred
+   * pick to the deferred resolver.
+   */
+  passComplete: boolean;
   /**
    * True once the Storyteller has actually said "everyone, close your eyes".
    * Tracked explicitly rather than derived, because that is an action they take,

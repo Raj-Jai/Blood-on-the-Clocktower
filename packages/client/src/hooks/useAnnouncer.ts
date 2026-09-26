@@ -65,11 +65,17 @@ export function useAnnouncer(): AnnouncerControls {
   const [enabled, setEnabledState] = useState<boolean>(() => readStored(ANNOUNCE_ENABLED_KEY, true));
   const [lastSpoken, setLastSpoken] = useState<string | null>(null);
   const lastRef = useRef<string | null>(null);
+  /** True while an utterance is in flight. */
+  const speakingRef = useRef(false);
+  /** The newest line waiting for the current one to finish. At most one. */
+  const pendingRef = useRef<string | null>(null);
 
   const supported = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
   useEffect(() => {
     return () => {
+      pendingRef.current = null;
+      speakingRef.current = false;
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
       }
@@ -79,29 +85,76 @@ export function useAnnouncer(): AnnouncerControls {
   const setEnabled = useCallback((value: boolean) => {
     setEnabledState(value);
     writeStored(ANNOUNCE_ENABLED_KEY, value);
-    if (!value && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    if (!value) {
+      // Silencing the table must also drop the queued line, or it fires after the
+      // cancel and the PA keeps talking to a room that turned it off.
+      pendingRef.current = null;
+      speakingRef.current = false;
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
     }
   }, []);
 
   const stop = useCallback(() => {
+    pendingRef.current = null;
+    speakingRef.current = false;
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
   }, []);
 
-  const speakOnce = useCallback((text: string, force: boolean) => {
-    const trimmed = text.trim();
-    if (trimmed.length === 0) return;
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    if (!force && lastRef.current === trimmed) return;
-    lastRef.current = trimmed;
-    setLastSpoken(trimmed);
-    // Replace rather than queue: a stale "wake up" read after "open your eyes" is
-    // worse than saying nothing.
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(new SpeechSynthesisUtterance(trimmed));
+  const speakNow = useCallback((text: string) => {
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.onend = () => {
+      speakingRef.current = false;
+      // Say the most recent line once the current one finishes. A PA that drops a
+      // line to be "fresh" is worse than one that is a beat late: a table that
+      // hears "Dev, close your eyes" and then "Ada, close your eyes" with no
+      // "Ada, wake up" in between has been told two people went to sleep and
+      // nobody woke up.
+      const next = pendingRef.current;
+      if (next) {
+        pendingRef.current = null;
+        speakNow(next);
+      }
+    };
+    utterance.onerror = () => {
+      speakingRef.current = false;
+    };
+    speakingRef.current = true;
+    window.speechSynthesis!.speak(utterance);
   }, []);
+
+  const speakOnce = useCallback(
+    (text: string, force: boolean) => {
+      const trimmed = text.trim();
+      if (trimmed.length === 0) return;
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      if (!force && lastRef.current === trimmed) return;
+      lastRef.current = trimmed;
+      setLastSpoken(trimmed);
+
+      if (force) {
+        // An explicit "say it again" is the user asking for this line NOW, so it
+        // is the one case where cutting off the current utterance is right.
+        pendingRef.current = null;
+        speakingRef.current = false;
+        window.speechSynthesis.cancel();
+        speakNow(trimmed);
+        return;
+      }
+
+      if (speakingRef.current) {
+        // Never truncate. Keep only the newest pending line, because anything
+        // older is already out of date by the time the current one finishes.
+        pendingRef.current = trimmed;
+        return;
+      }
+      speakNow(trimmed);
+    },
+    [speakNow]
+  );
 
   const announce = useCallback(
     (text: string) => {

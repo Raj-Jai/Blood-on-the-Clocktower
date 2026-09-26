@@ -258,7 +258,7 @@ function buildStep(
   };
 }
 
-function findStoredStep(night: NightState | null, step: NightStep): NightStepState | undefined {
+export function findStoredStep(night: NightState | null, step: NightStep): NightStepState | undefined {
   return night?.steps.find((s) => s.wakerPlayerId === step.wakerPlayerId && s.characterId === step.characterId);
 }
 
@@ -324,6 +324,7 @@ export function openNight(session: GameSession): NightState {
     activeIndex: 0,
     wakeIndex: 0,
     resolved: false,
+    passComplete: false,
     briefed: false,
     // Read from the previous night when the Storyteller set it, so the pause
     // length is a table preference rather than something reset every night.
@@ -405,7 +406,7 @@ export function submitNightChoice(
   // they cannot be woken before the death that woke them. That single step is
   // therefore still open after `resolveNight`, and blocking it would silently
   // delete the character's whole ability. Every other step stays closed.
-  if (night.resolved && step.characterId !== 'ravenkeeper') throw Errors.nightAlreadyResolved();
+  if (night.passComplete && step.characterId !== 'ravenkeeper') throw Errors.nightAlreadyResolved();
 
   const waker = session.players.get(playerId);
   if (!waker) throw Errors.playerNotFound();
@@ -439,7 +440,12 @@ export function submitNightChoice(
     `${waker.displayName} (${def.name}) chose ${targetIds.map((id) => nameOfPlayer(session, id)).join(' and ')}.`
   );
 
-  if (night.resolved && io) {
+  // Outside the `io` guard on purpose: whether a night is finished is a fact about
+  // the steps, not about who is connected, and a late pick (the Ravenkeeper woken by
+  // the night kill) is the thing that usually finishes it.
+  recomputeNightResolved(session);
+
+  if (night.passComplete && io) {
     resolveDeferredStep(session, io, waker, def, step);
   }
 }
@@ -494,7 +500,7 @@ export interface NightResolutionReport {
 export function resolveNight(session: GameSession, io: SocketIOServer): NightResolutionReport {
   const night = session.currentNight;
   if (!night) throw Errors.noOpenNight();
-  if (night.resolved) throw Errors.nightAlreadyResolved();
+  if (night.passComplete) throw Errors.nightAlreadyResolved();
   if (session.phase !== 'night') throw Errors.notNightPhase();
 
   const report: NightResolutionReport = { outstanding: [], killedPlayerIds: [], inheritance: null };
@@ -776,7 +782,12 @@ export function resolveNight(session: GameSession, io: SocketIOServer): NightRes
   }
 
   appendRavenkeeperWake(session, io, report);
-  night.resolved = true;
+  // Derived from the order, never assumed. Resolving one ability can reveal or add
+  // another (a Ravenkeeper waking, a chain reaction), so asserting the night is
+  // finished here is how the engine ended up reporting `resolved: true` next to an
+  // order that still had a step outstanding.
+  night.passComplete = true;
+  recomputeNightResolved(session);
 
   logNightEvent(session, 'night-resolved', `Night ${session.nightNumber} resolution complete.`);
   if (report.outstanding.length > 0) {
@@ -978,7 +989,7 @@ export function buildNightPrompt(session: GameSession, step: NightStep): NightPr
  */
 export function sendActiveNightPrompt(io: SocketIOServer, session: GameSession): void {
   const night = session.currentNight;
-  if (!night || night.resolved) return;
+  if (!night || night.passComplete) return;
   // During the briefing nobody is awake yet.
   if (!night.briefed) return;
   // While the pause between wakers is running, nobody may be woken. This is the
@@ -1033,7 +1044,7 @@ export function pendingWakerNames(session: GameSession): string[] {
  */
 export function currentWakeStep(session: GameSession): NightStep | null {
   const night = session.currentNight;
-  if (!night || night.resolved) return null;
+  if (!night || night.passComplete) return null;
   const order = buildNightOrder(session);
   if (order.length === 0) return null;
   const index = Math.max(0, Math.min(night.wakeIndex, order.length - 1));
@@ -1078,7 +1089,7 @@ export function currentWaker(session: GameSession): PlayerRecord | null {
  */
 export function finishWake(session: GameSession, playerId: string): void {
   const night = session.currentNight;
-  if (!night || night.resolved) return;
+  if (!night || night.passComplete) return;
 
   // Mark this waker dealt with, so the walk moves on past them.
   const step = buildNightOrder(session).find((s) => s.wakerPlayerId === playerId);
@@ -1168,6 +1179,55 @@ export function firstPlayerOwingAChoice(session: GameSession): PlayerRecord | nu
   return session.players.get(step.wakerPlayerId) ?? null;
 }
 
+/**
+ * A step that is still waiting on somebody.
+ *
+ * A step is outstanding only if it was not submitted AND it can actually be
+ * completed. Two kinds are excluded, and both exclusions are the whole reason the
+ * night can finish at all:
+ *
+ * - an auto-resolving character (Empath, Chef): `targetCount` is 0, so there is no
+ *   picker to wait for;
+ * - an unmakeable step (`isPossible: false`): its player has nothing to choose and
+ *   the Storyteller has nothing to wait for.
+ *
+ * Everything that decides "is this night done" — the night-level flag, the stepper
+ * counter, the outstanding list — must go through this one function. Two separate
+ * definitions is how the night ends up flagged resolved while its own order view
+ * still shows outstanding work.
+ */
+export function stepCountsAsOutstanding(session: GameSession, step: NightStep): boolean {
+  const stored = findStoredStep(session.currentNight, step);
+  if (stored?.resolved) return false;
+  if (!step.isPossible) return false;
+  return (step.targetCount ?? 0) > 0;
+}
+
+/**
+ * Recomputes the night-level "finished" flag from the outstanding steps.
+ *
+ * Called whenever a step is submitted, resolved, or added, because the flag is a
+ * cache of a derived fact. It is also the same rule the Storyteller's order view
+ * and its stepper counter use, so the flag, the counter and the outstanding list
+ * can never disagree about whether the night is done.
+ */
+export function isNightFinished(session: GameSession): boolean {
+  const night = session.currentNight;
+  if (!night) return false;
+  // Both halves are needed. "The pass has run" alone would ignore a Ravenkeeper
+  // still owing a pick; "nobody owes a choice" alone would fire the moment the
+  // last picker submits, before the Chef and Empath have been passed and long
+  // before dawn.
+  return night.passComplete && buildNightOrder(session).every((step) => !stepCountsAsOutstanding(session, step));
+}
+
+export function recomputeNightResolved(session: GameSession): boolean {
+  const night = session.currentNight;
+  if (!night) return false;
+  night.resolved = isNightFinished(session);
+  return night.resolved;
+}
+
 export function toNightOrderStepView(session: GameSession, step: NightStep): NightOrderStepView {
   const waker = session.players.get(step.wakerPlayerId);
   const def = getCharacterById(step.characterId);
@@ -1182,7 +1242,7 @@ export function toNightOrderStepView(session: GameSession, step: NightStep): Nig
     isFirstNight: step.isFirstNight,
     // An unmakeable step is shown as dealt with, because it is: there is nothing
     // for its player to do and nothing for the Storyteller to wait for.
-    resolved: (stored?.resolved ?? false) || !step.isPossible,
+    resolved: !stepCountsAsOutstanding(session, step),
     targetCount: step.targetCount,
     targetIds: stored?.targetIds ?? [],
     targetNames: (stored?.targetIds ?? []).map((id) => nameOfPlayer(session, id)),
@@ -1213,8 +1273,10 @@ export function toNightOrderUpdate(session: GameSession): NightOrderUpdatePayloa
     openedAt: night?.openedAt ?? null,
     // Excludes unmakeable steps. Listing one as outstanding is what makes the
     // night look like it is waiting on a player who can never act.
-    outstandingCharacterIds: steps.filter((s) => s.targetCount > 0 && !s.resolved && s.isPossible).map((s) => s.characterName),
-    resolved: night?.resolved ?? false,
+    outstandingCharacterIds: buildNightOrder(session)
+      .filter((s) => stepCountsAsOutstanding(session, s))
+      .map((s) => getCharacterById(s.characterId)?.name ?? s.characterId),
+    resolved: isNightFinished(session),
   };
 }
 

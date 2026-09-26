@@ -4,6 +4,8 @@ import { useAnnouncer } from './useAnnouncer.js';
 
 class FakeUtterance {
   text: string;
+  onend: (() => void) | null = null;
+  onerror: (() => void) | null = null;
   constructor(text: string) {
     this.text = text;
   }
@@ -11,9 +13,19 @@ class FakeUtterance {
 
 function installFakeSynthesis() {
   const spoken: string[] = [];
+  let current: FakeUtterance | null = null;
   const fake = {
-    speak: vi.fn((u: FakeUtterance) => spoken.push(u.text)),
+    speak: vi.fn((u: FakeUtterance) => {
+      spoken.push(u.text);
+      current = u;
+    }),
     cancel: vi.fn(),
+    /** Simulates the current utterance finishing. */
+    endCurrent: () => {
+      const u = current;
+      current = null;
+      u?.onend?.();
+    },
   };
   Object.defineProperty(window, 'speechSynthesis', { value: fake, configurable: true, writable: true });
   Object.defineProperty(window, 'SpeechSynthesisUtterance', {
@@ -77,12 +89,19 @@ describe('useAnnouncer', () => {
     expect(spoken).toEqual(['Bram, wake up.', 'Bram, wake up.']);
   });
 
-  it('cancels before speaking, so a stale wake-up is never read after open-eyes', () => {
-    const { fake } = installFakeSynthesis();
+  it('finishes one line before starting the next, rather than cutting it off', () => {
+    // The previous behaviour here was synth.cancel() before every line, which is
+    // what made the table hear "Dev, close your eyes" and then "Ada, close your
+    // eyes" with no wake-up between them.
+    const { spoken, fake } = installFakeSynthesis();
     const { result } = renderHook(() => useAnnouncer());
     act(() => result.current.announce('Bram, wake up.'));
     act(() => result.current.announce('Everyone, open your eyes.'));
-    expect(fake.cancel).toHaveBeenCalledTimes(2);
+    expect(fake.cancel).not.toHaveBeenCalled();
+    act(() => {
+      fake.endCurrent?.();
+    });
+    expect(spoken).toEqual(['Bram, wake up.', 'Everyone, open your eyes.']);
   });
 
   it('silences itself and cancels anything in flight when turned off', () => {
@@ -101,6 +120,68 @@ describe('useAnnouncer', () => {
     act(() => result.current.announce('   '));
     act(() => result.current.announce(''));
     expect(fake.speak).not.toHaveBeenCalled();
+  });
+
+  it('NEVER truncates a line: a wake-up is finished before the next one starts', () => {
+    // REGRESSION, reported from a live table: "it said Dev close your eyes, then
+    // Ada close your eyes". The wake-up was never heard. This hook used to call
+    // synth.cancel() before every new line, so when the Storyteller clicked
+    // through an auto-resolving character, "Ada, wake up" was cut off mid-sentence
+    // and replaced by "Ada, close your eyes". A table that hears two people told
+    // to sleep and nobody woken has been told the night skipped somebody.
+    const { spoken, fake } = installFakeSynthesis();
+    const { result } = renderHook(() => useAnnouncer());
+
+    act(() => result.current.announce('Ada, wake up.'));
+    expect(spoken).toEqual(['Ada, wake up.']);
+    expect(fake.cancel).not.toHaveBeenCalled();
+
+    // The next line arrives while the first is still speaking.
+    act(() => result.current.announce('Ada, close your eyes.'));
+    expect(fake.cancel).not.toHaveBeenCalled();
+    expect(spoken).toEqual(['Ada, wake up.']); // queued, not spoken yet
+
+    act(() => {
+      fake.endCurrent?.();
+    });
+    expect(spoken).toEqual(['Ada, wake up.', 'Ada, close your eyes.']);
+  });
+
+  it('keeps only the newest pending line, so a burst does not read out a backlog', () => {
+    const { spoken, fake } = installFakeSynthesis();
+    const { result } = renderHook(() => useAnnouncer());
+    act(() => result.current.announce('One, wake up.'));
+    act(() => result.current.announce('Two, wake up.'));
+    act(() => result.current.announce('Three, wake up.'));
+    act(() => {
+      fake.endCurrent?.();
+    });
+    expect(spoken).toEqual(['One, wake up.', 'Three, wake up.']);
+  });
+
+  it('drops the pending line when the table is silenced mid-utterance', () => {
+    const { fake, spoken: spokenRef } = installFakeSynthesis();
+    const { result } = renderHook(() => useAnnouncer());
+    act(() => result.current.announce('Ada, wake up.'));
+    act(() => result.current.announce('Ada, close your eyes.'));
+    act(() => result.current.setEnabled(false));
+    act(() => {
+      fake.endCurrent?.();
+    });
+    // Nothing queued behind the cancelled utterance.
+    expect(spokenRef).toEqual(['Ada, wake up.']);
+    expect(fake.speak).toHaveBeenCalledTimes(1);
+  });
+
+  it('an explicit "say it again" does cut off the current line', () => {
+    // This is the one case where truncating is right: the user asked for the line
+    // now, and it is the line already in the log.
+    const { spoken, fake } = installFakeSynthesis();
+    const { result } = renderHook(() => useAnnouncer());
+    act(() => result.current.announce('Ada, wake up.'));
+    act(() => result.current.repeat('Everyone, close your eyes.'));
+    expect(fake.cancel).toHaveBeenCalledTimes(1);
+    expect(spoken).toEqual(['Ada, wake up.', 'Everyone, close your eyes.']);
   });
 
   it('persists the preference per device', () => {
