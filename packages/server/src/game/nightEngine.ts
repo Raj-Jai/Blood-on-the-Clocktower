@@ -790,9 +790,12 @@ export function resolveNight(session: GameSession, io: SocketIOServer): NightRes
                 `${target.displayName} is the Mayor and died at night. The Storyteller may choose for another player to die instead.`
               );
             }
-          } else {
-            logNightEvent(session, 'protection-saved', `${target.displayName} was protected (Monk or Soldier) and survived.`);
           }
+          // A blocked kill is NOT logged here. `resolveDemonKill` already wrote
+          // `kill-blocked` naming the reason, and this used to add a second,
+          // differently-worded `protection-saved` for the very same event — so one
+          // save produced two lines in the audit log, and a Storyteller reading it
+          // could reasonably think two separate protections had come into play.
         }
         sendResolved(session, io, waker, def, stored, 'The night passes.', undefined);
         break;

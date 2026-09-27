@@ -31,8 +31,9 @@ const DECISION_KINDS = new Set([
   'poisoned',
   'poisoned-demon',
   'protected',
+  // `protection-saved` is deliberately absent: nothing writes it. A blocked kill is
+  // logged once, as `kill-blocked`, naming the reason. It used to be logged twice.
   'kill-blocked',
-  'protection-saved',
   'night-kill',
   'demon-inherited',
   'bluff-reassigned',

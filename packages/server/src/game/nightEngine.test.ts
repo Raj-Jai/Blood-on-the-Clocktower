@@ -775,6 +775,37 @@ describe('status effects', () => {
     expect(session.log.some((e) => e.kind === 'kill-blocked')).toBe(true);
   });
 
+  it('logs a blocked kill exactly ONCE, not twice', () => {
+    // `resolveDemonKill` writes `kill-blocked` naming the reason, and the Imp's step
+    // in the night pass used to add a second, differently-worded line for the very
+    // same event. The audit log is supposed to be the record a Storyteller trusts,
+    // and one save arriving as two lines reads as two protections.
+    //
+    // This has to go through the real night pass: calling `resolveDemonKill`
+    // directly skips the caller, which is where the duplicate was.
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'imp');
+    setCharacter(players[1]!, 'poisoner');
+    setCharacter(players[2]!, 'washerwoman');
+    setCharacter(players[3]!, 'chef');
+    setCharacter(players[4]!, 'recluse');
+    const victim = players[3]!;
+    victim.statusEffects.protected = true;
+    session.nightNumber = 2;
+    openNight(session);
+
+    submitNightChoice(session, players[0]!.playerId, [victim.playerId]);
+    resolveNight(session, null as never);
+
+    expect(victim.alive).toBe(true);
+    const blocked = session.log.filter((e) => e.kind === 'kill-blocked');
+    expect(blocked).toHaveLength(1);
+    // And nothing else describes the same save a second time.
+    expect(
+      session.log.filter((e) => /protected \(Monk or Soldier\) and survived/.test(e.detail))
+    ).toHaveLength(0);
+  });
+
   it('a poisoned Demon does not kill', () => {
     const { session, players } = makeSession(5);
     setCharacter(players[0]!, 'imp');
