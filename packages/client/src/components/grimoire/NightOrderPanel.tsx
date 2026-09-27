@@ -142,7 +142,13 @@ export function NightOrderPanel({ socket, nightOrder, nightLog }: NightOrderPane
         <button
           className="btn btn-inline"
           onClick={() => advance('next')}
-          disabled={activeIndex >= steps.length - 1 || resolved}
+          // NOT disabled at the end of the list. `activeIndex` is kept in step with
+          // the wake walk, so the last waker sitting at the last row is the exact
+          // moment this button is needed — a Storyteller dealing with a Chef or a
+          // Librarian with nobody to learn about had it greyed out and no way on
+          // from here. The walk itself refuses to move past anybody who still owes
+          // a choice, so an extra click is harmless.
+          disabled={resolved}
         >
           Next →
         </button>
@@ -151,8 +157,9 @@ export function NightOrderPanel({ socket, nightOrder, nightLog }: NightOrderPane
         </button>
       </div>
       <p className="faint" style={{ marginTop: 8 }}>
-        “Next” moves the cursor. “Resolve night” applies every step in official order and sends each player their
-        own result — the Poisoner acts before the Imp, so poisoning the Demon really does stop the kill.
+        “Next” moves the wake walk on by one person, and will not move past anybody who still owes a choice.
+        “Resolve night” applies every step in official order and sends each player their own result — the Poisoner
+        acts before the Imp, so poisoning the Demon really does stop the kill.
       </p>
 
       <div style={{ marginTop: 16, borderTop: '1px solid var(--border-subtle)', paddingTop: 12 }}>

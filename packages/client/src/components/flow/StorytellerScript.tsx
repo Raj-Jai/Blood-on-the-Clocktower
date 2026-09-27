@@ -84,6 +84,22 @@ export function StorytellerScript({
     socket?.emit(ClientEvents.StorytellerAdvanceNight, { action: 'resolve' });
   }
 
+  /**
+   * "I've dealt with the person who is awake."
+   *
+   * This has to live HERE, in the panel that says what to do, and not only in the
+   * night order list. Half the characters in the game — the Chef, the Empath, the
+   * Undertaker, and every learn-in character with nobody to learn about — have
+   * nothing to submit, so no player window ever shows a picker and the flow is
+   * simply waiting on the Storyteller to move the walk along. With this button
+   * only in the order list, the panel whose entire job is "what to do now" offered
+   * no action at that exact moment, and the only way forward was a control labelled
+   * as a cursor move in a different panel.
+   */
+  function dealWithWaker() {
+    socket?.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' });
+  }
+
   return (
     <div className="panel" style={{ borderColor: 'var(--accent-gold)' }} data-testid="storyteller-script">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
@@ -167,6 +183,15 @@ export function StorytellerScript({
               Skip the wait
             </button>
           </>
+        )}
+        {flow.stage === 'night-step' && flow.wakeBlockedUntil === null && !readyToResolve && !flow.needsChoiceFromName && (
+          // Not while somebody owes a choice. The server refuses to move the walk in
+          // that case anyway, and offering the button next to a "Waiting on: ..."
+          // warning just invites the Storyteller to click something that will not
+          // work.
+          <button className="btn btn-primary" onClick={dealWithWaker} data-testid="deal-with-waker">
+            I&apos;ve dealt with {flow.activePlayerName ?? 'them'} — next waker
+          </button>
         )}
         {flow.stage === 'night-step' && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.9rem' }}>

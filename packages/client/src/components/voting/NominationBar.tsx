@@ -49,6 +49,7 @@ export function NominationBar({ players, selfPlayerId, canNominate, onNominate }
         <div className="mobile-stack" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <select
             className="input"
+            data-testid="nominate-select"
             style={{ flex: 1 }}
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}

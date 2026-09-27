@@ -69,6 +69,21 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
     }
   }
 
+  // A night prompt only renders on the Character tab, so a player who was reading
+  // Town Square when the Storyteller woke them was told "You're awake. Do your
+  // thing." and then shown no prompt at all. Found by playing a game where the day
+  // before ends with everybody on the Town Square tab voting.
+  //
+  // Taking them there unasked is right: being woken is the one moment in this game
+  // where the screen they want is not a choice, and a prompt hidden behind a tab is
+  // indistinguishable from the app having lost it. Keyed on the prompt's identity
+  // so it fires once per wake-up and never fights the player over their tab
+  // afterwards.
+  useEffect(() => {
+    if (!session.nightPrompt) return;
+    setTab('character');
+  }, [session.nightPrompt?.playerId, session.nightPrompt?.nightNumber, session.nightPrompt?.characterId]);
+
   // The TurnGuide's buttons point at a tab without owning the tab state.
   useEffect(() => {
     const handler = (event: Event) => {

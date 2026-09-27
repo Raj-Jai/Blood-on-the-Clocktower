@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import type { CharacterType, GrimoirePlayerEntry } from '@clocktower/shared';
 import { getCharacterById } from '@clocktower/shared';
 
@@ -68,10 +69,15 @@ export function GrimoireTable({ grimoire, onToggleStatus, onMarkDead }: Grimoire
         <tbody>
           {sorted.map((entry, index) => {
             const label = groupLabel(entry);
+            // Keyed Fragment, not a bare <>. A key on an inner <tr> does not key the
+            // element React actually sees as the list child, so every grimoire render
+            // logged "Each child in a list should have a unique key prop" and React
+            // reconciled the rows by position. The card layout below already keyed
+            // its wrapper; this is the same fix.
             return (
-              <>
+              <Fragment key={entry.playerId}>
                 {isGroupStart(sorted, index) && label && (
-                  <tr key={`divider-${entry.playerId}`}>
+                  <tr>
                     <td
                       colSpan={6}
                       className={label === 'Evil' ? 'alignment-evil' : 'alignment-good'}
@@ -106,7 +112,7 @@ export function GrimoireTable({ grimoire, onToggleStatus, onMarkDead }: Grimoire
                     )}
                   </td>
                 </tr>
-              </>
+              </Fragment>
             );
           })}
         </tbody>

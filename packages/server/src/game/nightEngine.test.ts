@@ -440,6 +440,47 @@ describe('deferred night steps', () => {
     expect(buildFlowState(session).readyToResolve || buildFlowState(session).needsChoiceFromName).toBeTruthy();
   });
 
+  it('still walks when the night order contains a step with no stored record', () => {
+    // REGRESSION, and a silent one: the flow said a player owed a choice, so the
+    // Storyteller's "move on" control was withheld, while the prompt sender skipped
+    // the step it needed to prompt because it read the missing record as already
+    // dealt with. Nobody was woken and the Storyteller had nothing to click.
+    //
+    // A step with no record is reachable because buildNightOrder is recomputed from
+    // live state on every call: if the roster changes shape after the night opens,
+    // the order gains a step openNight never recorded. Removing a record here is
+    // that situation, exactly.
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'imp');
+    setCharacter(players[1]!, 'poisoner');
+    setCharacter(players[2]!, 'chef');
+    setCharacter(players[3]!, 'soldier');
+    setCharacter(players[4]!, 'recluse');
+    session.nightNumber = 2;
+    session.phase = 'night';
+    openNight(session);
+    session.currentNight!.briefed = true;
+
+    // Drop the Poisoner's record: an unresolved step with a choice to make.
+    const poisoner = players[1]!;
+    const before = session.currentNight!.steps.length;
+    session.currentNight!.steps = session.currentNight!.steps.filter((s) => s.wakerPlayerId !== poisoner.playerId);
+    expect(session.currentNight!.steps.length).toBe(before - 1);
+
+    // Reading the order must repair it rather than treat it as finished.
+    const order = buildNightOrder(session);
+    const step = order.find((s) => s.wakerPlayerId === poisoner.playerId);
+    expect(step).toBeDefined();
+    expect(step!.targetCount ?? 0).toBeGreaterThan(0);
+    expect(wakerIsFinished(session, poisoner.playerId)).toBe(false);
+    // The flow must NOT tell the Storyteller to move on past them.
+    expect(buildFlowState(session).needsChoiceFromPlayerId).not.toBeNull();
+    // And the record is back, so a submitted choice has somewhere to land.
+    expect(session.currentNight!.steps.some((s) => s.wakerPlayerId === poisoner.playerId)).toBe(true);
+    submitNightChoice(session, poisoner.playerId, [step!.legalTargetIds![0]!]);
+    expect(wakerIsFinished(session, poisoner.playerId)).toBe(true);
+  });
+
   it('still refuses a late submission from a character that is not deferred', () => {
     const { session, players } = makeSession(5);
     setCharacter(players[0]!, 'imp');

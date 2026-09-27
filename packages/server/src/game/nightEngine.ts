@@ -258,8 +258,39 @@ function buildStep(
   };
 }
 
+/**
+ * The stored record for a step in the current night, CREATING it if it is missing.
+ *
+ * The record is where a submitted choice and a "dealt with" flag live, so a step
+ * without one is a step the engine cannot remember anything about. That is not a
+ * theoretical state: `buildNightOrder` is recomputed from live game state on every
+ * call, so if the roster changes shape after the night opened — a character gaining
+ * or losing a night action, a death, the Storyteller changing an alignment — the
+ * order can contain a step that `openNight` never created a record for.
+ *
+ * Every reader used to treat that as "already dealt with", and the four call sites
+ * disagreed about it. The result was a hard, silent deadlock: the flow said a
+ * player owed a choice, so the Storyteller's "move on" control was withheld, while
+ * the prompt sender skipped the very step it needed to prompt, because it read the
+ * missing record as finished. The player was never woken and the Storyteller had
+ * nothing to click.
+ *
+ * Repairing on read makes the state impossible to be stuck in and is idempotent, so
+ * the hot path costs one array scan it was already paying.
+ */
 export function findStoredStep(night: NightState | null, step: NightStep): NightStepState | undefined {
-  return night?.steps.find((s) => s.wakerPlayerId === step.wakerPlayerId && s.characterId === step.characterId);
+  if (!night) return undefined;
+  const found = night.steps.find((s) => s.wakerPlayerId === step.wakerPlayerId && s.characterId === step.characterId);
+  if (found) return found;
+  const created: NightStepState = {
+    characterId: step.characterId,
+    wakerPlayerId: step.wakerPlayerId,
+    targetIds: [],
+    resolved: false,
+    overrideText: null,
+  };
+  night.steps.push(created);
+  return created;
 }
 
 /** Night order a player must still act on, in order. Drives the private prompt UI. */
@@ -999,6 +1030,8 @@ export function sendActiveNightPrompt(io: SocketIOServer, session: GameSession):
   if (wakeGateIsPending(session)) return;
 
   for (const step of buildNightOrder(session)) {
+    // findStoredStep repairs a missing record, so "no record" can no longer mean
+    // "already dealt with" here. That mismatch is what deadlocked the night.
     const stored = findStoredStep(night, step);
     if (!stored || stored.resolved) continue;
     if ((step.targetCount ?? 0) === 0) continue;
@@ -1023,6 +1056,8 @@ export function pendingWakerNames(session: GameSession): string[] {
   if (!night) return [];
   const names: string[] = [];
   for (const step of buildNightOrder(session)) {
+    // findStoredStep repairs a missing record, so "no record" can no longer mean
+    // "already dealt with" here. That mismatch is what deadlocked the night.
     const stored = findStoredStep(night, step);
     if (!stored || stored.resolved) continue;
     const player = session.players.get(step.wakerPlayerId);

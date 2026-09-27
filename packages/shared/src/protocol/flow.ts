@@ -191,8 +191,32 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
           now: flow.now,
         };
       }
+      // The waker is AWAKE and has nothing to submit: the Chef, the Empath, the
+      // Undertaker, and any learn-in character with nobody to learn about. They are
+      // not asleep and the night is not over.
+      //
+      // This branch used to fall through to "X, close your eyes" and "Everyone is
+      // done. Resolve the night." for exactly this state, which told the table to
+      // wake somebody and close the same person's eyes in consecutive sentences
+      // while telling the Storyteller the night was finished. The server's own
+      // `announcement` already says "X, wake up." here, and it is this line the PA
+      // reads aloud, so the whole table was told the wrong thing.
+      // "Done" is either the server's own readiness flag or the stepper saying
+      // every step is in. Both mean the same thing, and honouring only one of them
+      // is how this line ends up wrong in one direction or the other.
+      const allDone = flow.readyToResolve || (flow.totalSteps > 0 && flow.resolvedCount >= flow.totalSteps);
+      if (flow.activePlayerName && !allDone) {
+        return {
+          say: `${flow.activePlayerName}, wake up.`,
+          action: 'They have nothing to choose. Tell them what they learn, then move on to the next waker.',
+          canAdvance: true,
+          progress: `${flow.resolvedCount} of ${flow.totalSteps} steps in`,
+          now: flow.now,
+        };
+      }
+      // Genuinely done: every waker has been dealt with and the night can resolve.
       return {
-        say: flow.activePlayerName ? `${flow.activePlayerName}, close your eyes.` : 'Keep your eyes closed.',
+        say: 'Everyone, close your eyes.',
         action: 'Everyone is done. Resolve the night.',
         canAdvance: true,
         progress: `${flow.resolvedCount} of ${flow.totalSteps} steps in`,
