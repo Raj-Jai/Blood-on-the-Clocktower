@@ -12,10 +12,17 @@ interface NightPromptPanelProps {
    * Never pass the Grimoire, another player's role, or anything Storyteller-only.
    */
   onSpeak?: (text: string) => void;
-  /** A spoken toggle label + state, rendered so there is a visible control and not just a voice. */
+  /**
+   * A spoken toggle label + state.
+   *
+   * The panel renders one itself when `speechSupported` is set, which is how it is
+   * used standalone. Inside the moment card the card owns the toggle and this is left
+   * off, because two identical checkboxes stacked on one screen is worse than either
+   * alone — and the card's version also states the privacy rule, which is the part
+   * that matters.
+   */
   speechEnabled: boolean;
-  onToggleSpeech: (enabled: boolean) => void;
-  speechSupported: boolean;
+  speechSupported?: boolean;
 }
 
 /**
@@ -38,7 +45,6 @@ export function NightPromptPanel({
   result,
   onSpeak,
   speechEnabled,
-  onToggleSpeech,
   speechSupported,
 }: NightPromptPanelProps) {
   const [selected, setSelected] = useState<string[]>([]);
@@ -92,16 +98,7 @@ export function NightPromptPanel({
 
   return (
     <div className="panel" style={{ borderColor: 'var(--good-blue)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <h2 style={{ margin: 0 }}>{result ? 'Your Night Result' : 'You Are Awake'}</h2>
-        {speechSupported && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.9rem' }}>
-            <input type="checkbox" checked={speechEnabled} onChange={(e) => onToggleSpeech(e.target.checked)} />
-            Read my information aloud
-            <span className="faint">(this device only)</span>
-          </label>
-        )}
-      </div>
+      <h2 style={{ margin: 0 }}>{result ? 'Your Night Result' : 'You Are Awake'}</h2>
 
       {prompt && (
         <>

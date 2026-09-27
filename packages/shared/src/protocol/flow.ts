@@ -273,7 +273,10 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
 }
 
 // ---------------------------------------------------------------------------
-// The player's own instruction.
+// The player's own situation.
+//
+// The instruction a player is shown lives in `moment.ts`, which also decides what
+// belongs on their screen. This file keeps the shared inputs.
 // ---------------------------------------------------------------------------
 
 export interface PlayerFlowContext {
@@ -289,150 +292,8 @@ export interface PlayerFlowContext {
   isEvil: boolean;
 }
 
-export type PlayerAction = 'submit-night-choice' | 'nominate' | 'vote' | 'wait' | 'discuss' | 'none';
+/** How urgent a moment is, which is what its colour and icon follow. */
 export type PlayerTone = 'sleep' | 'action' | 'wait' | 'talk' | 'over';
-
-export interface PlayerInstruction {
-  /** The single most important line, in the imperative. */
-  title: string;
-  /** Supporting detail. */
-  detail: string;
-  action: PlayerAction;
-  tone: PlayerTone;
-}
-
-/**
- * What THIS player should be doing right now.
- *
- * Derived on the client from the public `FlowState` plus the player's own id, so
- * there is no second channel to get out of sync and nothing private is needed to
- * compute it. The one place it reads the player themselves is the night prompt,
- * which is already theirs alone.
- */
-export function derivePlayerInstruction(flow: FlowState, ctx: PlayerFlowContext): PlayerInstruction {
-  if (flow.stage === 'ended') {
-    return { title: 'The game is over.', detail: 'Talk the game out with the table.', action: 'none', tone: 'over' };
-  }
-
-  if (flow.stage === 'setup') {
-    return {
-      title: 'Wait for the Storyteller to deal the roles.',
-      detail: 'Nothing to do until the game starts.',
-      action: 'wait',
-      tone: 'wait',
-    };
-  }
-
-  // The briefing is before anyone wakes. Nobody may be told they are awake here,
-  // even if a prompt is somehow still on their screen from an earlier night.
-  if (flow.stage === 'night-briefing') {
-    return {
-      title: 'Close your eyes.',
-      detail: 'The Storyteller will wake you by name when it is your turn.',
-      action: 'wait',
-      tone: 'sleep',
-    };
-  }
-
-  if (flow.stage === 'night-step' || flow.stage === 'night-resolving') {
-    // A step that cannot be made must never be presented as a choice, or the
-    // player stares at an empty picker and a Send button that never enables.
-    if (ctx.stepIsUnmakeable) {
-      return {
-        title: 'Close your eyes.',
-        detail: 'Your character has nobody to choose tonight. The Storyteller will tell you what you learn.',
-        action: 'wait',
-        tone: 'sleep',
-      };
-    }
-    // "You are awake" keys off TWO signals, and deliberately not off
-    // `activePlayerId`. That field is the Storyteller's cursor — a presentation
-    // detail for their stepper — and it can point at somebody who has already
-    // acted while somebody else still owes a choice. Trusting it tells two
-    // players they are awake at once, which is worse than telling nobody.
-    //
-    // The two signals that are actually true:
-    //   - the server sent THEM a private night prompt, and
-    //   - the server says they are the one who owes a choice.
-    const owesAChoice = flow.needsChoiceFromPlayerId === ctx.playerId;
-    const hasBeenPrompted = ctx.hasOpenNightPrompt || ctx.hasSubmittedNightChoice;
-    const isTheWaker = (owesAChoice || hasBeenPrompted) && ctx.alive;
-
-    if (isTheWaker && ctx.hasOpenNightPrompt) {
-      return {
-        title: "You're awake. Do your thing.",
-        detail: 'Your prompt is below. Then close your eyes and wait.',
-        action: 'submit-night-choice',
-        tone: 'action',
-      };
-    }
-    if (isTheWaker && ctx.hasSubmittedNightChoice) {
-      return {
-        title: 'Done. Close your eyes and wait.',
-        detail: 'Your choice is in for tonight.',
-        action: 'wait',
-        tone: 'wait',
-      };
-    }
-    if (owesAChoice && !ctx.alive) {
-      return {
-        title: 'Close your eyes and wait.',
-        detail: 'The Storyteller will wake you if something happens to you.',
-        action: 'wait',
-        tone: 'wait',
-      };
-    }
-    if (flow.stage === 'night-resolving') {
-      return { title: 'Open your eyes.', detail: 'The night is over.', action: 'wait', tone: 'wait' };
-    }
-    const waitingOn = flow.needsChoiceFromName ?? flow.activePlayerName;
-    return {
-      title: 'Close your eyes.',
-      detail: waitingOn ? `Waiting for ${waitingOn}.` : 'Nothing to do right now.',
-      action: 'wait',
-      tone: 'sleep',
-    };
-  }
-
-  if (flow.stage === 'day-reveal') {
-    return {
-      title: 'Open your eyes. It is day.',
-      detail: 'Check the Grimoire and the seating circle to see who died last night.',
-      action: 'none',
-      tone: 'talk',
-    };
-  }
-
-  if (flow.stage === 'day-voting') {
-    if (!ctx.alive) {
-      return {
-        title: 'You are dead, but you have one vote left.',
-        detail: 'Use it on the Town Square tab if you want to.',
-        action: 'vote',
-        tone: 'action',
-      };
-    }
-    return {
-      title: 'Vote: hands up if you are in.',
-      detail: 'A simple majority of the living players executes.',
-      action: 'vote',
-      tone: 'action',
-    };
-  }
-
-  if (flow.stage === 'day-discussion') {
-    return {
-      title: ctx.alive ? 'Discuss. Nominate if you have a reason.' : 'Listen. You are dead.',
-      detail: ctx.isEvil
-        ? 'Your private chat is on the Evil Chat tab — nobody else can see it.'
-        : 'Open a nomination from the Town Square tab.',
-      action: ctx.alive ? 'discuss' : 'none',
-      tone: 'talk',
-    };
-  }
-
-  return { title: 'Wait for the Storyteller.', detail: '', action: 'wait', tone: 'wait' };
-}
 
 // ---------------------------------------------------------------------------
 // The leak guard.

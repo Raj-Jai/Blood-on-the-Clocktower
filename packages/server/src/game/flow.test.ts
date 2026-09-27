@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertSpeakableAnnouncement,
-  derivePlayerInstruction,
   deriveStorytellerLine,
   EMPTY_FLOW_STATE,
   type FlowState,
@@ -466,111 +465,6 @@ describe('the pause between wakers', () => {
     const report = resolveNight(session, null as never);
     expect(report.outstanding).toEqual([]);
     expect(session.currentNight!.resolved).toBe(true);
-  });
-});
-
-describe('derivePlayerInstruction', () => {
-  const nightStep: FlowState = {
-    ...EMPTY_FLOW_STATE,
-    stage: 'night-step',
-    phase: 'night',
-    nightNumber: 1,
-    announcement: 'Bram, wake up.',
-    activePlayerId: 'p0',
-    activePlayerName: 'Bram',
-    needsChoiceFromPlayerId: 'p0',
-    needsChoiceFromName: 'Bram',
-    stepNumber: 1,
-    totalSteps: 4,
-  };
-
-  it('tells the waker to act and everyone else to sleep', () => {
-    const waker = derivePlayerInstruction(nightStep, contextFor('p0', { hasOpenNightPrompt: true }));
-    expect(waker.title).toMatch(/awake/i);
-    expect(waker.action).toBe('submit-night-choice');
-    expect(waker.tone).toBe('action');
-
-    const sleeper = derivePlayerInstruction(nightStep, contextFor('p1'));
-    expect(sleeper.title).toMatch(/close your eyes/i);
-    expect(sleeper.detail).toContain('Bram');
-    expect(sleeper.action).toBe('wait');
-    expect(sleeper.tone).toBe('sleep');
-  });
-
-  it('never tells a finished player to get up when the cursor is still on them', () => {
-    // REGRESSION. `activePlayerId` is the Storyteller's stepper cursor and stays
-    // where it was left, so it can point at somebody who has ALREADY submitted
-    // while somebody else still owes a choice. Keying "you are awake" off the
-    // cursor told the finished player to get up again.
-    const cursorStillOnThem: FlowState = {
-      ...nightStep,
-      activePlayerId: 'p0',
-      activePlayerName: 'Bram',
-      needsChoiceFromPlayerId: 'p2',
-      needsChoiceFromName: 'Cleo',
-    };
-    const finished = derivePlayerInstruction(
-      cursorStillOnThem,
-      contextFor('p0', { hasSubmittedNightChoice: true })
-    );
-    expect(finished.title).toMatch(/close your eyes/i);
-    expect(finished.tone).toBe('wait');
-
-    const owed = derivePlayerInstruction(cursorStillOnThem, contextFor('p2', { hasOpenNightPrompt: true }));
-    expect(owed.action).toBe('submit-night-choice');
-
-    const bystander = derivePlayerInstruction(cursorStillOnThem, contextFor('p3'));
-    expect(bystander.tone).toBe('sleep');
-  });
-
-  it('believes the private prompt over the cursor', () => {
-    // The server only ever prompts the waker, so an open prompt is ground truth
-    // for "this person is awake", even if the flow has not caught up yet.
-    const stale: FlowState = { ...nightStep, needsChoiceFromPlayerId: 'p2', needsChoiceFromName: 'Cleo' };
-    expect(derivePlayerInstruction(stale, contextFor('p0', { hasOpenNightPrompt: true })).action).toBe(
-      'submit-night-choice'
-    );
-  });
-
-  it('tells a waker who already submitted to wait', () => {
-    const waker = derivePlayerInstruction(nightStep, contextFor('p0', { hasSubmittedNightChoice: true }));
-    expect(waker.title).toMatch(/close your eyes/i);
-    expect(waker.action).toBe('wait');
-  });
-
-  it('sends everyone to the Grimoire at dawn', () => {
-    const reveal: FlowState = { ...EMPTY_FLOW_STATE, stage: 'day-reveal', phase: 'day', dayNumber: 1 };
-    const instruction = derivePlayerInstruction(reveal, contextFor('p0'));
-    expect(instruction.title).toMatch(/open your eyes/i);
-    expect(instruction.detail).toMatch(/grimoire/i);
-    expect(instruction.tone).toBe('talk');
-  });
-
-  it('sends living players to discuss and dead players to listen', () => {
-    const discuss: FlowState = { ...EMPTY_FLOW_STATE, stage: 'day-discussion', phase: 'day', dayNumber: 2 };
-    expect(derivePlayerInstruction(discuss, contextFor('p0')).action).toBe('discuss');
-    const dead = derivePlayerInstruction(discuss, contextFor('p0', { alive: false }));
-    expect(dead.title).toMatch(/dead/i);
-    expect(dead.action).toBe('none');
-  });
-
-  it('tells players to vote during an open vote', () => {
-    const voting: FlowState = { ...EMPTY_FLOW_STATE, stage: 'day-voting', phase: 'day', dayNumber: 2, votingOpen: true };
-    expect(derivePlayerInstruction(voting, contextFor('p0')).action).toBe('vote');
-    expect(derivePlayerInstruction(voting, contextFor('p0', { alive: false })).title).toMatch(/one vote/i);
-  });
-
-  it('points an Evil player at their private chat', () => {
-    const discuss: FlowState = { ...EMPTY_FLOW_STATE, stage: 'day-discussion', phase: 'day', dayNumber: 2 };
-    const evil = derivePlayerInstruction(discuss, contextFor('p0', { isEvil: true }));
-    expect(evil.detail).toMatch(/evil chat/i);
-    expect(evil.detail).toMatch(/nobody else can see it/i);
-  });
-
-  it('tells a player to wait before the game starts', () => {
-    const instruction = derivePlayerInstruction(EMPTY_FLOW_STATE, contextFor('p0'));
-    expect(instruction.action).toBe('wait');
-    expect(instruction.tone).toBe('wait');
   });
 });
 

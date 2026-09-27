@@ -34,8 +34,6 @@ function renderPanel(prompt: NightPromptPayload | null, result: NightResolvedPay
       result={result}
       onSpeak={onSpeak}
       speechEnabled={false}
-      onToggleSpeech={vi.fn()}
-      speechSupported
     />
   );
   return { emit, onSpeak, ...view };
@@ -121,23 +119,21 @@ describe('NightPromptPanel', () => {
     expect(onSpeak).not.toHaveBeenCalled();
   });
 
-  it('offers a visible voice toggle rather than a hidden preference', () => {
-    const onToggle = vi.fn();
-    render(
+  it('does not render its own voice toggle, because the moment card owns it', () => {
+    // The panel used to render a "Read my information aloud" checkbox AND the
+    // moment card rendered an identical one directly above it, so a woken player
+    // saw the same control twice. The card's version stays, because it is the one
+    // that also states the privacy rule; this asserts the panel does not pile on.
+    const { container } = render(
       <NightPromptPanel
         socket={{ emit: vi.fn() } as never}
         prompt={makePrompt()}
         result={null}
         onSpeak={vi.fn()}
         speechEnabled={false}
-        onToggleSpeech={onToggle}
-        speechSupported
       />
     );
-    const toggle = screen.getByRole('checkbox', { name: /read my information aloud/i });
-    expect(toggle).not.toBeChecked();
-    fireEvent.click(toggle);
-    expect(onToggle).toHaveBeenCalledWith(true);
+    expect(container.querySelectorAll('input[type="checkbox"]').length).toBe(0);
   });
 
   it('renders the night result and notes that the Grimoire is never spoken', () => {
