@@ -159,8 +159,21 @@ Worth remembering because each looked like a wording problem and was a rules pro
 - The clients never learned that a nomination or a dead player's single vote had
   been spent, because the lobby was not rebroadcast, so a spent control stayed live.
 
+- One save was logged twice, in two different wordings, so the audit trail the
+  Storyteller is meant to trust showed one protection arriving as two lines. The
+  existing test called the resolver directly, which skipped the line that duplicated
+  it. A test has to drive the path the bug actually lived on.
+
 The pattern: **a control that the server would refuse is a bug even when the server
 refuses it correctly.** The client is the thing that has to know.
+
+And the recurring lesson from the sweeps: **a game that makes no progress is the
+harness's fault until proven otherwise.** Both "nobody died in 20 nights" and "8
+players never finished" were the sweep picking the first legal target for every
+character, so the Monk protected exactly whoever the Imp was about to attack, and
+the game could never get anywhere. Deriving health from what the ENGINE recorded
+(the night log) rather than from a broadcast that may or may not arrive is what made
+the real problem visible underneath it.
 
 ## Known limitations (not bugs, deliberate)
 
