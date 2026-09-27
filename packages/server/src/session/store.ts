@@ -56,6 +56,8 @@ export interface ActiveNomination {
   openedAt: number;
   closed: boolean;
   pendingExecution: boolean;
+  /** Set once the execution has actually been carried out, so it cannot be repeated. */
+  executed: boolean;
   resolvedTally: number | null;
 }
 

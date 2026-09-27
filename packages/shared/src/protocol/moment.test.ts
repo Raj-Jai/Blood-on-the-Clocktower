@@ -73,7 +73,12 @@ describe('derivePlayerMoment', () => {
 
   describe('being woken at night', () => {
     it('puts the private prompt on screen and asks for the choice', () => {
-      const m = derivePlayerMoment(flow({ activePlayerId: ADA }), ctx({ hasOpenNightPrompt: true }));
+      // Both signals: the server sent them a prompt, and the server still says the
+      // choice is owed. Either alone is not enough — see the submitted case below.
+      const m = derivePlayerMoment(
+        flow({ activePlayerId: ADA, needsChoiceFromPlayerId: ADA, needsChoiceFromName: 'Ada' }),
+        ctx({ hasOpenNightPrompt: true })
+      );
       expect(m.kind).toBe('awake-choose');
       expect(m.action).toBe('submit-night-choice');
       expect(m.showNightPrompt).toBe(true);
@@ -82,8 +87,9 @@ describe('derivePlayerMoment', () => {
     it('tells an auto-resolving character they are awake, even with no prompt', () => {
       // The Chef, the Empath, the Undertaker. They never get a picker, so before
       // this they were told to close their eyes while the Storyteller was standing
-      // there waiting to tell them something.
-      const m = derivePlayerMoment(flow({ activePlayerId: ADA }), ctx());
+      // there waiting to tell them something. Note needsChoiceFromPlayerId is NULL
+      // for them: there is no choice to owe.
+      const m = derivePlayerMoment(flow({ activePlayerId: ADA, needsChoiceFromPlayerId: null }), ctx());
       expect(m.kind).toBe('awake-listen');
       expect(m.showNightPrompt).toBe(false);
       expect(m.detail).toMatch(/listen to the storyteller/i);
@@ -97,6 +103,33 @@ describe('derivePlayerMoment', () => {
       );
       expect(m.kind).toBe('awake-listen');
       expect(m.detail).toMatch(/nobody to choose/i);
+    });
+
+    it('tells a player who has just submitted that they are done, not that they are awake', () => {
+      // REGRESSION, found by playing a game and reading a woken player's screen. The
+      // server clears a waker's prompt only at dawn, so straight after submitting,
+      // the panel was still on screen saying "Choice sent" with every button
+      // disabled — while the moment still said "You're awake. Do the thing below".
+      // The instruction was to use a control that could no longer be used.
+      //
+      // needsChoiceFromPlayerId has already moved on, and that is the signal that
+      // this player's turn is over.
+      const m = derivePlayerMoment(
+        flow({ activePlayerId: 'someone-else', needsChoiceFromPlayerId: 'someone-else', needsChoiceFromName: 'Bram' }),
+        ctx({ hasOpenNightPrompt: true })
+      );
+      expect(m.kind).toBe('awake-done');
+      expect(m.showNightPrompt).toBe(false);
+      expect(m.title).toMatch(/close your eyes/i);
+    });
+
+    it('still shows the picker while the server says this player owes the choice', () => {
+      const m = derivePlayerMoment(
+        flow({ activePlayerId: ADA, needsChoiceFromPlayerId: ADA, needsChoiceFromName: 'Ada' }),
+        ctx({ hasOpenNightPrompt: true })
+      );
+      expect(m.kind).toBe('awake-choose');
+      expect(m.showNightPrompt).toBe(true);
     });
 
     it('tells a player who has sent their choice that they are done', () => {

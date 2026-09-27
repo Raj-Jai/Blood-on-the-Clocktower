@@ -13,6 +13,10 @@ export function NominationBar({ players, selfPlayerId, canNominate, onNominate }
   const [confirming, setConfirming] = useState(false);
   const candidates = players.filter((p) => p.playerId !== selfPlayerId && p.alive);
   const targetName = candidates.find((p) => p.playerId === targetId)?.displayName;
+  // A player gets one nomination a day, and the server refuses a second. Saying so
+  // here is better than letting someone press the button and be rejected.
+  const alreadyNominated = players.find((p) => p.playerId === selfPlayerId)?.hasNominatedToday ?? false;
+  const blocked = alreadyNominated || !canNominate;
 
   function reset() {
     setTargetId('');
@@ -22,7 +26,10 @@ export function NominationBar({ players, selfPlayerId, canNominate, onNominate }
   return (
     <div className="panel">
       <h3 style={{ marginTop: 0 }}>Nominate</h3>
-      {!canNominate && <p className="faint">You can't nominate right now.</p>}
+      {alreadyNominated && !canNominate && (
+        <p className="faint">You have already nominated today. You get one nomination a day.</p>
+      )}
+      {!canNominate && !alreadyNominated && <p className="faint">You can't nominate right now.</p>}
 
       {confirming && targetId ? (
         <div>
@@ -53,7 +60,7 @@ export function NominationBar({ players, selfPlayerId, canNominate, onNominate }
             style={{ flex: 1 }}
             value={targetId}
             onChange={(e) => setTargetId(e.target.value)}
-            disabled={!canNominate}
+            disabled={blocked}
           >
             <option value="">Choose a player…</option>
             {candidates.map((p) => (
@@ -64,7 +71,7 @@ export function NominationBar({ players, selfPlayerId, canNominate, onNominate }
           </select>
           <button
             className="btn btn-primary"
-            disabled={!canNominate || !targetId}
+            disabled={blocked || !targetId}
             onClick={() => setConfirming(true)}
           >
             Nominate

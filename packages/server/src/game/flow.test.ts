@@ -194,6 +194,7 @@ describe('buildFlowState — day', () => {
       openedAt: Date.now(),
       closed: false,
       pendingExecution: false,
+      executed: false,
       resolvedTally: null,
     };
     const flow = buildFlowState(session);

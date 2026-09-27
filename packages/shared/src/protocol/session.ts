@@ -101,6 +101,15 @@ export interface ActiveNominationView {
   votes: NominationVote[];
   closed: boolean;
   pendingExecution: boolean;
+  /**
+   * The execution has already been carried out.
+   *
+   * Without this the Storyteller's "Execute X" button stayed live forever after they
+   * used it, and the server — which only refused a nomination that was not closed
+   * AND pending — would run the same execution again. Found by a driver that kept
+   * clicking a button that never went away.
+   */
+  executed: boolean;
 }
 
 /** A single entry in the post-night question queue (public — who asked and the answer are visible to all). */

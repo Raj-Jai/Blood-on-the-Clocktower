@@ -110,10 +110,18 @@ export function derivePlayerMoment(flow: FlowState, ctx: PlayerFlowContext): Pla
   }
 
   if (flow.stage === 'night-step' || flow.stage === 'night-resolving') {
-    // A picker is proven awake by their own private prompt. Nothing else counts:
-    // `activePlayerId` is a cursor and can point at somebody already done, which
-    // is how two players used to be told they were awake at once.
-    if (ctx.alive && ctx.hasOpenNightPrompt) {
+    // Whether it is still this player's turn. The server clears the waker's prompt
+    // only at dawn, so after submitting, the prompt is still on screen and still
+    // says "Choice sent" with every button disabled. Without this check a player who
+    // had already sent their choice was told "You're awake. Do the thing below" —
+    // an instruction to use a control that can no longer be used.
+    const owesAChoice = flow.needsChoiceFromPlayerId === ctx.playerId;
+
+    // A picker is proven awake by their own private prompt AND by the server still
+    // saying the choice is owed. The prompt alone is not enough, and neither is the
+    // cursor: `activePlayerId` can point at somebody already done, which is how two
+    // players used to be told they were awake at once.
+    if (ctx.alive && ctx.hasOpenNightPrompt && owesAChoice) {
       return {
         ...base,
         kind: 'awake-choose',
@@ -137,8 +145,10 @@ export function derivePlayerMoment(flow: FlowState, ctx: PlayerFlowContext): Pla
       };
     }
 
-    // Already sent: done for the night.
-    if (ctx.alive && ctx.hasSubmittedNightChoice) {
+    // Already sent, and the server has moved on. The prompt is still on screen but
+    // every control in it is disabled, so the honest thing is to say the turn is
+    // over rather than leave a dead picker under an instruction to use it.
+    if (ctx.alive && (ctx.hasSubmittedNightChoice || (ctx.hasOpenNightPrompt && !owesAChoice))) {
       return {
         ...base,
         kind: 'awake-done',

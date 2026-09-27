@@ -67,6 +67,10 @@ export function broadcastLobby(io: SocketIOServer, session: GameSession): void {
     connected: p.connectionId !== null,
     alive: p.alive,
     seatIndex: p.seatIndex,
+    // Public and harmless — "this player has already used their nomination today"
+    // is visible at a real table — and it lets a client stop offering a control the
+    // server will refuse, instead of letting the player find out by being rejected.
+    hasNominatedToday: p.hasNominatedToday,
   }));
   io.to(sessionRoom(session.code)).emit(ServerEvents.LobbyUpdate, { players });
 }

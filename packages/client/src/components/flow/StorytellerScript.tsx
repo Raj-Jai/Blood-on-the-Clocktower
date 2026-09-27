@@ -101,7 +101,14 @@ export function StorytellerScript({
   }
 
   return (
-    <div className="panel" style={{ borderColor: 'var(--accent-gold)' }} data-testid="storyteller-script">
+    <div
+      className="panel"
+      style={{ borderColor: 'var(--accent-gold)' }}
+      data-testid="storyteller-script"
+      // The flow stage is exposed so a test — or the game simulator — can tell what
+      // beat the night is on without parsing the sentence it is supposed to read.
+      data-stage={flow.stage}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
         <h2 style={{ margin: 0 }}>What to do now</h2>
         {line.progress && <span className="muted">{line.progress}</span>}

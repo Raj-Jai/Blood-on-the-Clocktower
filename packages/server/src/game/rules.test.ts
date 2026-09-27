@@ -136,6 +136,43 @@ describe('confirmExecution', () => {
     expect(session.players.get('p1')!.alive).toBe(false);
   });
 
+  it('executes once and only once', () => {
+    // REGRESSION, found by a driver that kept clicking an "Execute" button which
+    // never went away. `pendingExecution` stays true for the rest of the day — it is
+    // only cleared when a LATER nomination ties this one out — so the guard that
+    // existed was not enough and the same player could be executed repeatedly, each
+    // time re-broadcasting the execution and re-running the post-death sweep.
+    const session = makeSession(5);
+    const nomination = nominate(session, 'p0', 'p1');
+    castVote(session, nomination.id, 'p0', true);
+    castVote(session, nomination.id, 'p2', true);
+    castVote(session, nomination.id, 'p3', true);
+    closeVote(session, nomination.id);
+
+    expect(nomination.pendingExecution).toBe(true);
+    confirmExecution(session, nomination.id);
+    expect(nomination.executed).toBe(true);
+    expect(session.players.get('p1')!.alive).toBe(false);
+
+    // The guard is still satisfied, so only an explicit check can stop this.
+    expect(nomination.closed).toBe(true);
+    expect(nomination.pendingExecution).toBe(true);
+    expect(() => confirmExecution(session, nomination.id)).toThrow();
+  });
+
+  it('refuses to execute a player who is already dead', () => {
+    // Even with a fresh, qualifying nomination: you cannot execute a corpse.
+    const session = makeSession(5);
+    session.players.get('p1')!.alive = false;
+    const nomination = nominate(session, 'p0', 'p2');
+    castVote(session, nomination.id, 'p0', true);
+    castVote(session, nomination.id, 'p1', true);
+    castVote(session, nomination.id, 'p3', true);
+    closeVote(session, nomination.id);
+    session.players.get('p2')!.alive = false;
+    expect(() => confirmExecution(session, nomination.id)).toThrow();
+  });
+
   it('rejects execution when the nomination did not qualify', () => {
     const session = makeSession(5);
     const nomination = nominate(session, 'p0', 'p1');

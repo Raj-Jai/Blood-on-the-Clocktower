@@ -29,6 +29,7 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
   const [abilityText, setAbilityText] = useState('');
   const [timerMinutes, setTimerMinutes] = useState(DEFAULT_TIMER_MINUTES);
   const [showRoles, setShowRoles] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [demonKillTarget, setDemonKillTarget] = useState('');
   const [confirmingEndGame, setConfirmingEndGame] = useState(false);
   const [dismissedInheritance, setDismissedInheritance] = useState(false);
@@ -141,29 +142,6 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
         </div>
       )}
 
-      <div className="panel header-row">
-        <div>
-          <h1 style={{ margin: 0 }}>Storyteller</h1>
-          <p className="muted" style={{ margin: 0 }}>
-            {gameEnded
-              ? 'Game over'
-              : session.phase === 'day'
-                ? `Day ${session.dayNumber}`
-                : `Night ${Math.max(1, session.nightNumber)}`}
-          </p>
-        </div>
-        <div className="mobile-stack" style={{ display: 'flex', gap: 8 }}>
-          <button className="btn btn-inline" onClick={() => setShowRoles(true)}>
-            📜 Roles
-          </button>
-          <button className="btn btn-inline btn-primary" onClick={togglePhase} disabled={gameEnded}>
-            Switch to {session.phase === 'day' ? 'Night' : 'Day'}
-          </button>
-        </div>
-      </div>
-
-      <PhaseTimer phaseEndsAt={session.phaseEndsAt} phase={session.phase} />
-
       <StorytellerScript
         socket={socket}
         flow={session.flow}
@@ -172,6 +150,137 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
         readyToResolve={Boolean(session.nightOrder) && session.nightOrder!.outstandingCharacterIds.length === 0}
         outstanding={session.nightOrder?.outstandingCharacterIds ?? []}
       />
+
+      {/*
+        The nomination is the Storyteller's job while it is open, so it sits directly
+        under the script rather than in a panel of its own further down the page. It
+        used to appear twice: here, and as "Close the vote" / "Execute X" inside the
+        script. One place, one button.
+      */}
+      {session.nomination && !gameEnded && (
+        <div className="panel" data-testid="active-nomination">
+          <h2 style={{ marginTop: 0 }}>On the block</h2>
+          <p style={{ margin: '0 0 8px' }}>
+            <strong>{grimoire.find((g) => g.playerId === session.nomination!.targetId)?.displayName}</strong> was
+            nominated by {grimoire.find((g) => g.playerId === session.nomination!.nominatorId)?.displayName}.{' '}
+            <strong>{session.nomination.votes.filter((v) => v.voting).length}</strong> vote
+            {session.nomination.votes.filter((v) => v.voting).length === 1 ? '' : 's'} for execution.
+          </p>
+          {session.nomination.executed ? (
+            /* The button used to stay live after it had been used, and the server
+               would run the same execution again. The outcome is now stated instead. */
+            <p style={{ margin: 0 }}>
+              <strong>{grimoire.find((g) => g.playerId === session.nomination!.targetId)?.displayName}</strong> was
+              executed.
+            </p>
+          ) : !session.nomination.closed ? (
+            <button className="btn btn-primary" onClick={closeVote} data-testid="close-vote">
+              Close the vote
+            </button>
+          ) : session.nomination.pendingExecution ? (
+            <button className="btn btn-danger" onClick={confirmExecution} data-testid="confirm-execution">
+              Execute{' '}
+              {grimoire.find((g) => g.playerId === session.nomination!.targetId)?.displayName ?? 'the nominee'}
+            </button>
+          ) : (
+            <p className="faint" style={{ margin: 0 }}>
+              This nomination did not pass. Nothing happens — a player who has not yet nominated can try again.
+            </p>
+          )}
+        </div>
+      )}
+
+      <PhaseTimer phaseEndsAt={session.phaseEndsAt} phase={session.phase} />
+
+      {/*
+        Grimoire and seating stay in view: a Storyteller needs the roles and the
+        neighbour order in front of them all night, and those are not "options" the
+        way a timer or a chat log is. Everything that IS an option — the manual
+        overrides, the timer, the night order and its log, the discretion queue, the
+        free-text result sender, the questions and the chats — is behind one button.
+      */}
+      <div className="panel">
+        <h2 style={{ marginTop: 0 }}>Grimoire</h2>
+        <GrimoireTable grimoire={grimoire} onToggleStatus={toggleStatus} onMarkDead={markDead} />
+      </div>
+
+      <div className="panel">
+        <h2 style={{ marginTop: 0, textAlign: 'center' }}>Seating Circle</h2>
+        <p className="faint" style={{ textAlign: 'center', marginTop: -8 }}>
+          Use the arrows to swap a player with their neighbour.
+        </p>
+        <SeatingCircle players={grimoire} onMoveSeat={moveSeat} />
+        <Graveyard players={grimoire} />
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button className="btn btn-inline" onClick={() => setMoreOpen(true)} data-testid="st-more-button">
+          More
+        </button>
+      </div>
+
+      {moreOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Storyteller tools"
+          data-testid="st-more-sheet"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(5,5,8,0.85)',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+            zIndex: 500,
+            padding: 0,
+          }}
+        >
+          <div
+            className="panel modal-panel"
+            style={{
+              maxWidth: 760,
+              width: '100%',
+              maxHeight: '88vh',
+              overflowY: 'auto',
+              borderBottomLeftRadius: 0,
+              borderBottomRightRadius: 0,
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: 12,
+                position: 'sticky',
+                top: 0,
+                background: 'var(--bg-panel)',
+                padding: '4px 0 12px',
+                marginBottom: 4,
+                borderBottom: '1px solid var(--border-subtle)',
+              }}
+            >
+              <h2 style={{ margin: 0, whiteSpace: 'nowrap' }}>Storyteller tools</h2>
+              <button className="btn btn-inline" onClick={() => setMoreOpen(false)} data-testid="st-more-close">
+                Close
+              </button>
+            </div>
+
+            <section style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                className="btn btn-inline"
+                onClick={() => {
+                  setMoreOpen(false);
+                  setShowRoles(true);
+                }}
+              >
+                All characters
+              </button>
+              <button className="btn btn-primary" onClick={togglePhase} disabled={gameEnded}>
+                Switch to {session.phase === 'day' ? 'Night' : 'Day'}
+              </button>
+            </section>
 
       {!gameEnded && (
         <div className="panel" style={{ borderColor: 'var(--evil-red)' }}>
@@ -277,28 +386,6 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
 
       <NightDiscretionPanel socket={socket} grimoire={grimoire} nightNumber={session.nightNumber} />
 
-      {session.nomination && !gameEnded && (
-        <div className="panel">
-          <h2 style={{ marginTop: 0 }}>Active Nomination</h2>
-          <p>
-            {grimoire.find((g) => g.playerId === session.nomination!.nominatorId)?.displayName} nominated{' '}
-            {grimoire.find((g) => g.playerId === session.nomination!.targetId)?.displayName}
-          </p>
-          <p>Votes for: {session.nomination.votes.filter((v) => v.voting).length}</p>
-          {!session.nomination.closed ? (
-            <button className="btn" onClick={closeVote}>
-              Close Vote
-            </button>
-          ) : session.nomination.pendingExecution ? (
-            <button className="btn btn-danger" onClick={confirmExecution}>
-              Confirm Execution
-            </button>
-          ) : (
-            <p className="faint">This nomination did not pass.</p>
-          )}
-        </div>
-      )}
-
       <div className="panel">
         <h2 style={{ marginTop: 0 }}>Share an Ability Result</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 420 }}>
@@ -327,6 +414,10 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
       <OpenChatPanel messages={session.openChatMessages} onSend={sendOpenChat} />
 
       <EvilChatPanel messages={session.chatMessages} onSend={() => {}} readOnly />
+
+          </div>
+        </div>
+      )}
 
       {showRoles && <RoleReferenceSection onClose={() => setShowRoles(false)} />}
     </div>

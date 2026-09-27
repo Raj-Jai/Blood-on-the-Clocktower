@@ -59,7 +59,14 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
   const distribution = session.distribution;
   const isEvil = distribution?.role === 'player' && distribution.alignment === 'evil';
   const gameEnded = session.phase === 'ended';
-  const canNominate = session.phase === 'day' && session.alive && !session.nomination;
+  // A CLOSED nomination does not block a new one — the server only refuses while a
+  // vote is open (rules.ts). It used to be `!session.nomination`, so after a failed
+  // execution vote every player was left staring at "This nomination did not pass"
+  // with no way to nominate anybody else for the rest of the day. Found by playing a
+  // game where the vote did not reach the threshold.
+  const voteOpen = Boolean(session.nomination && !session.nomination.closed);
+  const nominatedToday = session.lobbyPlayers.find((p) => p.playerId === selfPlayerId)?.hasNominatedToday ?? false;
+  const canNominate = session.phase === 'day' && session.alive && !voteOpen && !nominatedToday;
   const canVote = session.phase === 'day' && !session.nomination?.closed && !gameEnded;
   const showAbilityResult = Boolean(session.abilityResult) && session.abilityResult !== dismissedResult;
 
@@ -126,7 +133,9 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
     }
 
     if (moment.action === 'nominate') {
-      return session.nomination ? (
+      // Only an OPEN vote displaces the nomination control. A closed one, whether it
+      // passed or not, is history.
+      return voteOpen && session.nomination ? (
         <VoteTally
           nomination={session.nomination}
           players={session.lobbyPlayers}

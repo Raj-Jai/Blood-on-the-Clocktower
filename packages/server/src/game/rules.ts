@@ -23,6 +23,7 @@ export function nominate(session: GameSession, nominatorId: string, targetId: st
     openedAt: Date.now(),
     closed: false,
     pendingExecution: false,
+    executed: false,
     resolvedTally: null,
   };
   nominator.hasNominatedToday = true;
@@ -120,13 +121,21 @@ export function confirmExecution(session: GameSession, nominationId: string): Ex
   if (!nomination.closed || !nomination.pendingExecution) {
     throw Errors.invalidPhaseTransition();
   }
+  // An execution happens once. The guard above stays true forever, because
+  // `pendingExecution` is only cleared when a LATER nomination ties this one out, so
+  // without this the same player could be executed repeatedly by a button that never
+  // went away.
+  if (nomination.executed) throw Errors.invalidPhaseTransition();
   const target = session.players.get(nomination.targetId);
   if (!target) throw Errors.playerNotFound();
+  // You cannot execute a corpse, whatever the vote said.
+  if (!target.alive) throw Errors.targetDead();
   const wasDemon = target.characterType === 'demon';
   // The Saint's trigger is read BEFORE the death is applied, so the caller can
   // end the game on the strength of the execution itself.
   const wasSaint = checkSaintExecution(session, target.playerId) !== null;
   target.alive = false;
+  nomination.executed = true;
   // Remove from the qualifying list so a later tie in the same day can't reference a resolved execution twice.
   session.resolvedNominationsToday = session.resolvedNominationsToday.filter((r) => r.targetId !== nomination.targetId);
   return { targetPlayerId: target.playerId, wasDemon, wasSaint };
@@ -159,5 +168,6 @@ export function toNominationView(nomination: ActiveNomination): ActiveNomination
     votes: [...nomination.votes.entries()].map(([playerId, voting]) => ({ playerId, voting })),
     closed: nomination.closed,
     pendingExecution: nomination.pendingExecution,
+    executed: nomination.executed,
   };
 }

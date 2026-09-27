@@ -51,7 +51,7 @@ describe('PlayerMomentCard', () => {
   it('shows the one instruction and whatever control it was given', () => {
     render(
       <PlayerMomentCard
-        flow={flow({ activePlayerId: ADA })}
+        flow={flow({ activePlayerId: ADA, needsChoiceFromPlayerId: ADA, needsChoiceFromName: 'Ada' })}
         context={ctx({ hasOpenNightPrompt: true })}
         action={<button>Send my choice</button>}
         {...speech}

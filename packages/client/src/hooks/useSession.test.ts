@@ -53,6 +53,7 @@ function nomination(overrides: Partial<ActiveNominationView> = {}): ActiveNomina
     votes: [],
     closed: false,
     pendingExecution: false,
+    executed: false,
     ...overrides,
   };
 }

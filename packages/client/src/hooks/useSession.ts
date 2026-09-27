@@ -26,6 +26,8 @@ export interface LobbyPlayer {
   connected: boolean;
   alive: boolean;
   seatIndex: number;
+  /** This player has already used their one nomination today. */
+  hasNominatedToday: boolean;
 }
 
 export interface ChatMessageView {

@@ -710,6 +710,11 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const nomination = nominate(session, player.playerId, targetPlayerId);
         io.to(sessionRoom(session.code)).emit(ServerEvents.NominationOpened, toNominationView(nomination));
         broadcastFlow(io, session);
+        // Nominating spends that player's one nomination for the day, and the clients
+        // only learn it from the lobby. Without this the NominateBar stayed live for
+        // somebody who had already nominated, and the only way to find out was to be
+        // rejected by the server.
+        broadcastLobby(io, session);
         store.touch(session);
       })
     );
@@ -721,6 +726,9 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const { nominationId, voting } = VoteSchema.parse(raw);
         const nomination = castVote(session, nominationId, player.playerId, voting);
         io.to(sessionRoom(session.code)).emit(ServerEvents.NominationVoteUpdate, toNominationView(nomination));
+        // A dead player's single vote is spent here, and the clients track that from
+        // the lobby rather than being told.
+        broadcastLobby(io, session);
         store.touch(session);
       })
     );
@@ -748,6 +756,15 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const { nominationId } = ConfirmExecutionSchema.parse(raw);
         const result = confirmExecution(session, nominationId);
         io.to(sessionRoom(session.code)).emit(ServerEvents.ExecutionConfirmed, { playerId: result.targetPlayerId });
+        // Tell the executed player themselves. The night-kill path does this, and its
+        // absence here meant an executed player carried on believing they were alive:
+        // no death notice, the wrong TurnGuide, and a nomination control offered for
+        // a player the server would refuse. The public banner is not the same thing —
+        // it names them, it does not change their own state.
+        const executed = session.players.get(result.targetPlayerId);
+        if (executed) {
+          sendToPlayer(io, executed, ServerEvents.PlayerSelfUpdate, { alive: false });
+        }
         broadcastGrimoire(io, session);
         broadcastLobby(io, session);
         broadcastFlow(io, session);
@@ -764,6 +781,10 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
           }
         }
         handlePostDeath(io, session, result.targetPlayerId, result.wasDemon, 'executed');
+        // Tell the room the nomination is spent. Without this the Storyteller's
+        // "Execute X" button stayed live after they had used it, and players kept
+        // being shown a vote for an execution that had already happened.
+        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationVoteUpdate, toNominationView(session.nomination!));
         store.touch(session);
       })
     );
