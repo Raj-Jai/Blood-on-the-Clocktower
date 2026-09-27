@@ -72,18 +72,6 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
     setAbilityText('');
   }
 
-  function closeVote() {
-    if (session.nomination) {
-      socket?.emit(ClientEvents.StorytellerCloseVote, { nominationId: session.nomination.nominationId });
-    }
-  }
-
-  function confirmExecution() {
-    if (session.nomination) {
-      socket?.emit(ClientEvents.StorytellerConfirmExecution, { nominationId: session.nomination.nominationId });
-    }
-  }
-
   function answerQuestion(questionId: string, answer: string) {
     socket?.emit(ClientEvents.StorytellerAnswerQuestion, { questionId, answer });
   }
@@ -166,25 +154,26 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
             <strong>{session.nomination.votes.filter((v) => v.voting).length}</strong> vote
             {session.nomination.votes.filter((v) => v.voting).length === 1 ? '' : 's'} for execution.
           </p>
+          {/* Information only. The controls live in the script above, which is the
+              panel whose entire job is "what to do now" — and having "Close the
+              vote" in both meant two identical primary buttons one screen apart,
+              which is the same mistake the player's duplicate tab bars were. */}
           {session.nomination.executed ? (
-            /* The button used to stay live after it had been used, and the server
-               would run the same execution again. The outcome is now stated instead. */
             <p style={{ margin: 0 }}>
               <strong>{grimoire.find((g) => g.playerId === session.nomination!.targetId)?.displayName}</strong> was
               executed.
             </p>
-          ) : !session.nomination.closed ? (
-            <button className="btn btn-primary" onClick={closeVote} data-testid="close-vote">
-              Close the vote
-            </button>
           ) : session.nomination.pendingExecution ? (
-            <button className="btn btn-danger" onClick={confirmExecution} data-testid="confirm-execution">
-              Execute{' '}
-              {grimoire.find((g) => g.playerId === session.nomination!.targetId)?.displayName ?? 'the nominee'}
-            </button>
-          ) : (
+            <p className="alignment-evil" style={{ margin: 0, fontWeight: 600 }}>
+              This nomination met the threshold. Execute them when the table is ready.
+            </p>
+          ) : session.nomination.closed ? (
             <p className="faint" style={{ margin: 0 }}>
               This nomination did not pass. Nothing happens — a player who has not yet nominated can try again.
+            </p>
+          ) : (
+            <p className="faint" style={{ margin: 0 }}>
+              Voting is open. Everyone may change their vote until you close it.
             </p>
           )}
         </div>
@@ -366,20 +355,6 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
         <p className="faint" style={{ marginTop: 8 }}>
           The duration above is also used automatically when you switch phases with "Switch to Day/Night".
         </p>
-      </div>
-
-      <div className="panel">
-        <h2 style={{ marginTop: 0, textAlign: 'center' }}>Seating Circle</h2>
-        <p className="faint" style={{ textAlign: 'center', marginTop: -8 }}>
-          Use ↺ / ↻ to swap a player with their neighbor.
-        </p>
-        <SeatingCircle players={grimoire} onMoveSeat={moveSeat} />
-        <Graveyard players={grimoire} />
-      </div>
-
-      <div className="panel">
-        <h2 style={{ marginTop: 0 }}>Grimoire</h2>
-        <GrimoireTable grimoire={grimoire} onToggleStatus={toggleStatus} onMarkDead={markDead} />
       </div>
 
       <NightOrderPanel socket={socket} nightOrder={session.nightOrder} nightLog={session.nightLog} />
