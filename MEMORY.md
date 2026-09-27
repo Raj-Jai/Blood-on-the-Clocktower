@@ -47,14 +47,24 @@ the server tests will pass against stale code and tell you nothing.
 ## The game simulator
 
 Unit tests cannot tell you whether a game is playable. `/tmp/play` holds a harness
-that drives six real browser windows through real games, clicking the real UI and
+that drives real browser windows through real games, clicking the real UI and
 reading the real DOM at every beat.
 
 - `/tmp/play/ui.mjs` — opens the windows, seeds each one's `localStorage`, and
-  exposes scoped helpers (`playerSubmit`, `nominateFrom`, `orderFromUi`, …).
-- `/tmp/play/ui-game.mjs` — plays whole games: night, dawn, nomination, vote.
+  exposes scoped helpers (`playerSubmit`, `nominateFrom`, `state`, `stMoreClick`, …).
+- `/tmp/play/ui-game.mjs` — plays whole games: night, dawn, nomination, vote, death.
   `NIGHTS=3 node ui-game.mjs` from `/tmp/play`.
+- `/tmp/play/ui-sizes.mjs` — the same at 5, 6 and 7 players. `SIZES=5,6,7 NIGHTS=3`.
+- `/tmp/play/sweep.mjs` — a fast socket-only sweep of every legal table size,
+  5 to 15. No browsers, so it covers the whole range in seconds and can play many
+  games. `SIZES=5,15 GAMES=2 MAX_NIGHTS=25 node sweep.mjs`.
+- `/tmp/play/moments.mjs`, `st-views.mjs` — screenshot every distinct moment, for
+  judging the UI by looking at it rather than by reading the JSX.
 - `/tmp/play/probe-*.mjs` — single-purpose probes written while chasing a bug.
+
+This is what found essentially every real bug in the recent work. A test that
+passes 170 times and then fails on a random roster is usually telling you the
+product has two defensible answers and the test picked one.
 
 Two hard-won rules for that harness:
 
@@ -111,6 +121,46 @@ presentation only and clicking it fast used to skip auto-resolving characters
 entirely. `finishWake` opens a server-owned pause (`wakeGate`) between wakers so
 the table cannot time the order; `tickNightGate` releases it. "Next" never advances
 more than one waker and never moves past somebody who still owes a choice.
+
+## The screens
+
+Both pages follow one rule: **the one thing to do now, with its control directly
+beneath it, and everything else behind a single "More" button.**
+
+- A player has no tabs. There used to be five, rendered twice with different labels,
+  and the night prompt sat above the tab bar while the instruction said "your prompt
+  is below". `PlayerMomentCard` takes the moment's single control as a child, so
+  "in view" is structural rather than a promise.
+- A `PlayerMoment` never names a place — no "the Town Square tab". There is a test
+  that fails if a tab, panel or button word appears in any state. That coupling is
+  what made the prompt-behind-a-tab bug possible in the first place.
+- The Storyteller leads with `StorytellerScript`, keeps the Grimoire and seating in
+  view because they are needed all night, and puts the manual overrides, timer, night
+  order, discretion, free-text sender, questions and chats behind More.
+- Nothing is rendered twice. Two identical controls on one screen is not "belt and
+  braces", it is a coin toss.
+
+## Things the app used to get wrong, all found by playing
+
+Worth remembering because each looked like a wording problem and was a rules problem:
+
+- An auto-resolving or unmakeable character was told to close their eyes while the
+  Storyteller stood there ready to tell them their information. In the real game you
+  ARE woken for those.
+- A player who had submitted was told "You're awake. Do the thing below" over a picker
+  where every button was disabled. The server clears a waker's prompt only at dawn, so
+  "has a prompt" is not the same as "owes a choice".
+- A failed execution vote locked every player out of nominating for the rest of the
+  day, because the client required no nomination at all rather than no OPEN one.
+- The Storyteller's "Execute X" button never went away, and the server would run the
+  same execution again, because `pendingExecution` stays true all day.
+- An executed player was never told they had died: the night-kill path sends
+  `PlayerSelfUpdate { alive: false }` and the execution path did not.
+- The clients never learned that a nomination or a dead player's single vote had
+  been spent, because the lobby was not rebroadcast, so a spent control stayed live.
+
+The pattern: **a control that the server would refuse is a bug even when the server
+refuses it correctly.** The client is the thing that has to know.
 
 ## Known limitations (not bugs, deliberate)
 
