@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { createSession, joinSession } from '../api/rest.js';
+import { createSession, getSessionInfo, joinSession, reclaimSession } from '../api/rest.js';
 import { savePlayerSession, saveStorytellerSession } from '../api/storage.js';
 import { ApiError } from '../api/rest.js';
 
@@ -13,7 +13,9 @@ export function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [slow, setSlow] = useState(false);
+  const [gameInProgress, setGameInProgress] = useState(false);
   const slowTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const codeCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function startBusy() {
     setBusy(true);
@@ -34,8 +36,29 @@ export function HomePage() {
   useEffect(() => {
     return () => {
       if (slowTimerRef.current) clearTimeout(slowTimerRef.current);
+      if (codeCheckTimerRef.current) clearTimeout(codeCheckTimerRef.current);
     };
   }, []);
+
+  // Debounced check: once a full-length code is typed, ask whether that
+  // game is already in progress so we can offer "Reclaim my seat" instead
+  // of a join attempt that the server would just reject as LOBBY_CLOSED.
+  useEffect(() => {
+    if (codeCheckTimerRef.current) clearTimeout(codeCheckTimerRef.current);
+    const trimmed = joinCode.trim();
+    if (trimmed.length < 5) {
+      setGameInProgress(false);
+      return;
+    }
+    codeCheckTimerRef.current = setTimeout(async () => {
+      try {
+        const info = await getSessionInfo(trimmed.toUpperCase());
+        setGameInProgress(info.phase !== 'lobby');
+      } catch {
+        setGameInProgress(false);
+      }
+    }, 400);
+  }, [joinCode]);
 
   async function handleCreate() {
     startBusy();
@@ -65,6 +88,21 @@ export function HomePage() {
     }
   }
 
+  async function handleReclaim() {
+    if (!joinCode.trim() || !displayName.trim()) return;
+    startBusy();
+    try {
+      const code = joinCode.trim().toUpperCase();
+      const { playerId, playerToken } = await reclaimSession(code, displayName.trim());
+      savePlayerSession(code, playerId, playerToken);
+      navigate(`/play/${code}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not reclaim that seat.');
+    } finally {
+      stopBusy();
+    }
+  }
+
   return (
     <div className="app-shell">
       <header style={{ textAlign: 'center', marginBottom: 32 }}>
@@ -81,7 +119,7 @@ export function HomePage() {
       </div>
 
       <div className="panel">
-        <h2 style={{ marginTop: 0 }}>Join a Game</h2>
+        <h2 style={{ marginTop: 0 }}>{gameInProgress ? 'Rejoin a Game' : 'Join a Game'}</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 320 }}>
           <input
             className="input"
@@ -97,9 +135,21 @@ export function HomePage() {
             onChange={(e) => setDisplayName(e.target.value)}
             maxLength={30}
           />
-          <button className="btn btn-primary" disabled={busy} onClick={handleJoin}>
-            {busy ? 'Joining…' : 'Join Game'}
-          </button>
+          {gameInProgress ? (
+            <>
+              <p className="faint" style={{ margin: 0 }}>
+                This game has already started. If you already had a seat and got disconnected, reclaim it below
+                using the exact same name.
+              </p>
+              <button className="btn btn-primary" disabled={busy} onClick={handleReclaim}>
+                {busy ? 'Reclaiming…' : 'Reclaim My Seat'}
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-primary" disabled={busy} onClick={handleJoin}>
+              {busy ? 'Joining…' : 'Join Game'}
+            </button>
+          )}
         </div>
       </div>
 

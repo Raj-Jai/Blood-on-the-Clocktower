@@ -13,15 +13,18 @@ import { Graveyard } from '../components/seating/Graveyard.js';
 import { PhaseTimer } from '../components/shared/PhaseTimer.js';
 import { StorytellerQuestionPanel } from '../components/questions/StorytellerQuestionPanel.js';
 import { RoleReferenceSection } from '../components/reference/RoleReferenceSection.js';
+import { RoomCodeChip } from '../components/shared/RoomCodeChip.js';
 
 interface StorytellerGamePageProps {
   socket: Socket | null;
   session: SessionState;
+  code: string;
+  onLeaveGame: () => void;
 }
 
 const DEFAULT_TIMER_MINUTES = 5;
 
-export function StorytellerGamePage({ socket, session }: StorytellerGamePageProps) {
+export function StorytellerGamePage({ socket, session, code, onLeaveGame }: StorytellerGamePageProps) {
   const [abilityTarget, setAbilityTarget] = useState('');
   const [abilityText, setAbilityText] = useState('');
   const [timerMinutes, setTimerMinutes] = useState(DEFAULT_TIMER_MINUTES);
@@ -29,6 +32,7 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
   const [demonKillTarget, setDemonKillTarget] = useState('');
   const [confirmingEndGame, setConfirmingEndGame] = useState(false);
   const [dismissedInheritance, setDismissedInheritance] = useState(false);
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
 
   const grimoire = session.grimoire ?? [];
 
@@ -144,12 +148,28 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
           </p>
         </div>
         <div className="mobile-stack" style={{ display: 'flex', gap: 8 }}>
+          <RoomCodeChip code={code} />
           <button className="btn btn-inline" onClick={() => setShowRoles(true)}>
             📜 Roles
           </button>
           <button className="btn btn-inline btn-primary" onClick={togglePhase} disabled={gameEnded}>
             Switch to {session.phase === 'day' ? 'Night' : 'Day'}
           </button>
+          {!confirmingLeave ? (
+            <button className="btn btn-inline" onClick={() => setConfirmingLeave(true)}>
+              Leave
+            </button>
+          ) : (
+            <>
+              <span className="faint">There's no way back in as Storyteller once you leave — sure?</span>
+              <button className="btn btn-inline btn-danger" onClick={onLeaveGame}>
+                Yes, leave
+              </button>
+              <button className="btn btn-inline" onClick={() => setConfirmingLeave(false)}>
+                Cancel
+              </button>
+            </>
+          )}
         </div>
       </div>
 

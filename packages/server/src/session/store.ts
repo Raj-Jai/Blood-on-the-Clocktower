@@ -7,6 +7,8 @@ const generateCode = customAlphabet(CODE_ALPHABET, 5);
 export interface PlayerRecord {
   playerId: string;
   connectionId: string | null;
+  /** Epoch ms when this player's socket last disconnected, or null while connected / before ever connecting. Used to gate the reclaim grace period. */
+  disconnectedAt: number | null;
   displayName: string;
   character: string | null;
   characterType: CharacterType | null;
@@ -132,6 +134,7 @@ export class SessionStore {
     const record: PlayerRecord = {
       playerId,
       connectionId: null,
+      disconnectedAt: null,
       displayName,
       character: null,
       characterType: null,

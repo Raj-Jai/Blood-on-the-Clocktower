@@ -37,5 +37,6 @@ export function resolveAndBind(store: SessionStore, socket: Socket, token: strin
     throw Errors.playerNotFound();
   }
   player.connectionId = socket.id;
+  player.disconnectedAt = null;
   return { session, isStoryteller: false, player };
 }

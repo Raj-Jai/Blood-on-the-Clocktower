@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Navigate, Route, HashRouter, Routes, useParams } from 'react-router-dom';
+import { Navigate, Route, HashRouter, Routes, useParams, useNavigate } from 'react-router-dom';
 import { HomePage } from './routes/HomePage.js';
 import { LobbyPage } from './routes/LobbyPage.js';
 import { StorytellerGamePage } from './routes/StorytellerGamePage.js';
@@ -9,16 +9,23 @@ import { useSession } from './hooks/useSession.js';
 import { ErrorToast } from './components/shared/ErrorToast.js';
 import { ConnectionBanner } from './components/shared/ConnectionBanner.js';
 import { OnboardingModal } from './components/onboarding/OnboardingModal.js';
-import { getStoredSession, hasSeenOnboarding, markOnboardingSeen } from './api/storage.js';
+import { clearStoredSession, getStoredSession, hasSeenOnboarding, markOnboardingSeen } from './api/storage.js';
 
 function StorytellerRoute() {
   const { code } = useParams();
-  const stored = getStoredSession();
-  const token = stored.storytellerToken && stored.code === code ? stored.storytellerToken : null;
+  const navigate = useNavigate();
+  const stored = code ? getStoredSession(code) : null;
+  const token = stored?.role === 'storyteller' ? stored.token : null;
   const { socket, status } = useGameSocket(token);
   const session = useSession(socket);
 
   if (!token) return <Navigate to="/" replace />;
+
+  function leaveGame() {
+    if (code) clearStoredSession(code);
+    socket?.disconnect();
+    navigate('/');
+  }
 
   return (
     <>
@@ -26,7 +33,7 @@ function StorytellerRoute() {
       {session.phase === 'lobby' ? (
         <LobbyPage code={code ?? ''} socket={socket} session={session} isStoryteller />
       ) : (
-        <StorytellerGamePage socket={socket} session={session} />
+        <StorytellerGamePage socket={socket} session={session} code={code ?? ''} onLeaveGame={leaveGame} />
       )}
       <ErrorToast error={session.lastError} />
     </>
@@ -35,8 +42,9 @@ function StorytellerRoute() {
 
 function PlayerRoute() {
   const { code } = useParams();
-  const stored = getStoredSession();
-  const validToken = stored.playerToken && stored.code === code ? stored.playerToken : null;
+  const navigate = useNavigate();
+  const stored = code ? getStoredSession(code) : null;
+  const validToken = stored?.role === 'player' ? stored.token : null;
   const { socket, status } = useGameSocket(validToken);
   const session = useSession(socket);
   const [showOnboarding, setShowOnboarding] = useState(!hasSeenOnboarding());
@@ -48,8 +56,14 @@ function PlayerRoute() {
 
   if (!validToken) return <Navigate to="/" replace />;
 
-  const selfPlayerId = window.localStorage.getItem('botc:playerId') ?? '';
+  const selfPlayerId = stored?.playerId ?? '';
   const alignment = session.distribution?.role === 'player' ? session.distribution.alignment : null;
+
+  function leaveGame() {
+    if (code) clearStoredSession(code);
+    socket?.disconnect();
+    navigate('/');
+  }
 
   return (
     <>
@@ -57,7 +71,7 @@ function PlayerRoute() {
       {session.phase === 'lobby' ? (
         <LobbyPage code={code ?? ''} socket={socket} session={session} isStoryteller={false} />
       ) : (
-        <PlayerGamePage socket={socket} session={session} selfPlayerId={selfPlayerId} />
+        <PlayerGamePage socket={socket} session={session} selfPlayerId={selfPlayerId} code={code ?? ''} onLeaveGame={leaveGame} />
       )}
       {showOnboarding && (
         <OnboardingModal

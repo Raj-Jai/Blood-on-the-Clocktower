@@ -46,3 +46,14 @@ export function joinSession(code: string, displayName: string) {
     }
   );
 }
+
+/** Reclaims a disconnected seat in a game already in progress, by display name, re-issuing a token for that same player. */
+export function reclaimSession(code: string, displayName: string) {
+  return request<{ playerId: string; playerToken: string; code: string }>(
+    `/api/sessions/${encodeURIComponent(code)}/reclaim`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ displayName }),
+    }
+  );
+}

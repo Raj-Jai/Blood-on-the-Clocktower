@@ -16,6 +16,7 @@ import { Graveyard } from '../components/seating/Graveyard.js';
 import { PhaseTimer } from '../components/shared/PhaseTimer.js';
 import { QuestionQueuePanel } from '../components/questions/QuestionQueuePanel.js';
 import { RoleReferenceSection } from '../components/reference/RoleReferenceSection.js';
+import { RoomCodeChip } from '../components/shared/RoomCodeChip.js';
 import type { LobbyPlayer } from '../hooks/useSession.js';
 
 function SeatingCirclePanel({ players, selfPlayerId }: { players: LobbyPlayer[]; selfPlayerId: string }) {
@@ -32,15 +33,18 @@ interface PlayerGamePageProps {
   socket: Socket | null;
   session: SessionState;
   selfPlayerId: string;
+  code: string;
+  onLeaveGame: () => void;
 }
 
 type Tab = 'character' | 'town' | 'questions' | 'discussion' | 'chat';
 
-export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePageProps) {
+export function PlayerGamePage({ socket, session, selfPlayerId, code, onLeaveGame }: PlayerGamePageProps) {
   const [tab, setTab] = useState<Tab>('character');
   const [showRules, setShowRules] = useState(false);
   const [showSeating, setShowSeating] = useState(false);
   const [showRoles, setShowRoles] = useState(false);
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
 
   const distribution = session.distribution;
   const isEvil = distribution?.role === 'player' && distribution.alignment === 'evil';
@@ -94,6 +98,7 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
           {!session.alive && <p className="alignment-evil" style={{ margin: 0 }}>You are dead. You may still vote once.</p>}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <RoomCodeChip code={code} />
           <button className="btn btn-inline" onClick={() => setShowSeating(true)}>
             🪑 Seating
           </button>
@@ -103,6 +108,21 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
           <button className="btn btn-inline" onClick={() => setShowRules(true)}>
             Rules
           </button>
+          {!confirmingLeave ? (
+            <button className="btn btn-inline" onClick={() => setConfirmingLeave(true)}>
+              Leave
+            </button>
+          ) : (
+            <>
+              <span className="faint">You can reclaim your seat later with the same name. Leave now?</span>
+              <button className="btn btn-inline btn-danger" onClick={onLeaveGame}>
+                Yes, leave
+              </button>
+              <button className="btn btn-inline" onClick={() => setConfirmingLeave(false)}>
+                Cancel
+              </button>
+            </>
+          )}
         </div>
       </div>
 

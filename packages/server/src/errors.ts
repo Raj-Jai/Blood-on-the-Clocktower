@@ -60,4 +60,20 @@ export const Errors = {
     new ClocktowerError('QUESTION_NOT_ACTIVE', 'Answer questions in order — this one is not next in the queue.', 403),
   notTheDemon: () => new ClocktowerError('NOT_THE_DEMON', 'Only a living Demon can make a night kill.', 403),
   gameAlreadyEnded: () => new ClocktowerError('GAME_ALREADY_ENDED', 'This game has already ended.', 403),
+  reclaimNotInProgress: () =>
+    new ClocktowerError('RECLAIM_NOT_IN_PROGRESS', 'This game is still in the lobby — join it normally instead.', 400),
+  reclaimNoMatch: () =>
+    new ClocktowerError(
+      'RECLAIM_NO_MATCH',
+      "No disconnected seat matches that name. Check the spelling, or ask your Storyteller to confirm it.",
+      404
+    ),
+  reclaimStillConnected: () =>
+    new ClocktowerError('RECLAIM_STILL_CONNECTED', 'That seat is still connected elsewhere. If that was you, use your other tab/device.', 409),
+  reclaimTooSoon: () =>
+    new ClocktowerError(
+      'RECLAIM_TOO_SOON',
+      "That seat disconnected moments ago and may just be reconnecting on its own. Please wait a bit and try again.",
+      409
+    ),
 };

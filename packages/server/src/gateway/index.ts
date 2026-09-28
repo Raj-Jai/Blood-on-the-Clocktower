@@ -551,6 +551,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
       } else if (identity.player) {
         if (identity.player.connectionId === socket.id) {
           identity.player.connectionId = null;
+          identity.player.disconnectedAt = Date.now();
           broadcastLobby(io, identity.session);
         }
       }
