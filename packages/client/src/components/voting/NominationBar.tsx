@@ -5,24 +5,32 @@ interface NominationBarProps {
   players: LobbyPlayer[];
   selfPlayerId: string;
   canNominate: boolean;
+  hasNominatedToday?: boolean;
   onNominate: (targetPlayerId: string) => void;
 }
 
-export function NominationBar({ players, selfPlayerId, canNominate, onNominate }: NominationBarProps) {
+export function NominationBar({ players, selfPlayerId, canNominate, hasNominatedToday, onNominate }: NominationBarProps) {
   const [targetId, setTargetId] = useState('');
   const [confirming, setConfirming] = useState(false);
   const candidates = players.filter((p) => p.playerId !== selfPlayerId && p.alive);
   const targetName = candidates.find((p) => p.playerId === targetId)?.displayName;
+  const self = players.find((p) => p.playerId === selfPlayerId);
 
   function reset() {
     setTargetId('');
     setConfirming(false);
   }
 
+  function reasonCannotNominate(): string {
+    if (hasNominatedToday) return "You've already nominated today. Anyone else who hasn't yet still can.";
+    if (self && !self.alive) return "You're dead and can't nominate. You still get one vote for the rest of the game.";
+    return "You can't nominate right now.";
+  }
+
   return (
     <div className="panel">
       <h3 style={{ marginTop: 0 }}>Nominate</h3>
-      {!canNominate && <p className="faint">You can't nominate right now.</p>}
+      {!canNominate && <p className="faint">{reasonCannotNominate()}</p>}
 
       {confirming && targetId ? (
         <div>

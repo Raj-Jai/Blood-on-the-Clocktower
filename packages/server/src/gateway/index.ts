@@ -295,12 +295,18 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const session = requireStoryteller(socket);
         const { phase, timerSeconds } = SetPhaseSchema.parse(raw);
         if (session.phase !== 'day' && session.phase !== 'night') throw Errors.invalidPhaseTransition();
-        if (phase === 'day') {
-          resetForNewDay(session);
-          resetQuestionQueue(session);
-          session.dayNumber += 1;
+        // A redundant transition to the CURRENT phase (double-click, client
+        // retry after a dropped ack, etc.) must not re-run resetForNewDay --
+        // that would silently drop a pendingExecution nomination and hand
+        // everyone a fresh nomination mid-day. Only the timer can be updated.
+        if (phase !== session.phase) {
+          if (phase === 'day') {
+            resetForNewDay(session);
+            resetQuestionQueue(session);
+            session.dayNumber += 1;
+          }
+          session.phase = phase;
         }
-        session.phase = phase;
         session.phaseEndsAt = timerSeconds ? Date.now() + timerSeconds * 1000 : null;
         broadcastPhaseChanged(io, session);
         broadcastGrimoire(io, session);
@@ -392,7 +398,8 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         requireGameNotEnded(session);
         const { targetPlayerId } = NominateSchema.parse(raw);
         const nomination = nominate(session, player.playerId, targetPlayerId);
-        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationOpened, toNominationView(nomination));
+        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationOpened, toNominationView(session, nomination));
+        broadcastLobby(io, session);
         store.touch(session);
       })
     );
@@ -403,7 +410,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         requireGameNotEnded(session);
         const { nominationId, voting } = VoteSchema.parse(raw);
         const nomination = castVote(session, nominationId, player.playerId, voting);
-        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationVoteUpdate, toNominationView(nomination));
+        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationVoteUpdate, toNominationView(session, nomination));
         store.touch(session);
       })
     );
@@ -414,7 +421,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         requireGameNotEnded(session);
         const { nominationId } = CloseVoteSchema.parse(raw);
         const nomination = closeVote(session, nominationId);
-        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationClosed, toNominationView(nomination));
+        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationClosed, toNominationView(session, nomination));
         store.touch(session);
       })
     );

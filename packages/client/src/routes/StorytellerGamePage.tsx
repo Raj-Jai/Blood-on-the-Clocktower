@@ -258,14 +258,16 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
             {grimoire.find((g) => g.playerId === session.nomination!.nominatorId)?.displayName} nominated{' '}
             {grimoire.find((g) => g.playerId === session.nomination!.targetId)?.displayName}
           </p>
-          <p>Votes for: {session.nomination.votes.filter((v) => v.voting).length}</p>
+          <p>
+            Votes for: {session.nomination.votesFor} / {session.nomination.threshold} needed
+          </p>
           {!session.nomination.closed ? (
             <button className="btn" onClick={closeVote}>
               Close Vote
             </button>
           ) : session.nomination.pendingExecution ? (
-            <button className="btn btn-danger" onClick={confirmExecution}>
-              Confirm Execution
+            <button className="btn btn-danger" onClick={confirmExecution} disabled={session.nomination.executed}>
+              {session.nomination.executed ? 'Executed' : 'Confirm Execution'}
             </button>
           ) : (
             <p className="faint">This nomination did not pass.</p>

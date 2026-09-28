@@ -5,6 +5,7 @@ import { livingPlayerCount } from '../session/store.js';
 import { Errors } from '../errors.js';
 
 export function nominate(session: GameSession, nominatorId: string, targetId: string): ActiveNomination {
+  if (session.phase !== 'day') throw Errors.invalidPhaseTransition();
   const nominator = session.players.get(nominatorId);
   const target = session.players.get(targetId);
   if (!nominator || !target) throw Errors.playerNotFound();
@@ -22,6 +23,7 @@ export function nominate(session: GameSession, nominatorId: string, targetId: st
     closed: false,
     pendingExecution: false,
     resolvedTally: null,
+    executed: false,
   };
   nominator.hasNominatedToday = true;
   session.nomination = nomination;
@@ -29,6 +31,7 @@ export function nominate(session: GameSession, nominatorId: string, targetId: st
 }
 
 export function castVote(session: GameSession, nominationId: string, playerId: string, voting: boolean): ActiveNomination {
+  if (session.phase !== 'day') throw Errors.invalidPhaseTransition();
   const nomination = session.nomination;
   if (!nomination || nomination.id !== nominationId) throw Errors.noActiveNomination();
   if (nomination.closed) throw Errors.nominationClosed();
@@ -64,6 +67,7 @@ export function tally(nomination: ActiveNomination): number {
 }
 
 export function closeVote(session: GameSession, nominationId: string): ActiveNomination {
+  if (session.phase !== 'day') throw Errors.invalidPhaseTransition();
   const nomination = session.nomination;
   if (!nomination || nomination.id !== nominationId) throw Errors.noActiveNomination();
   if (nomination.closed) throw Errors.nominationClosed();
@@ -104,10 +108,14 @@ export function confirmExecution(session: GameSession, nominationId: string): Ex
   if (!nomination.closed || !nomination.pendingExecution) {
     throw Errors.invalidPhaseTransition();
   }
+  // Idempotency guard: a duplicate emit (double-click, client retry) must not
+  // re-run death side effects (win checks, DemonInherited, etc.) a second time.
+  if (nomination.executed) throw Errors.nominationAlreadyExecuted();
   const target = session.players.get(nomination.targetId);
   if (!target) throw Errors.playerNotFound();
   const wasDemon = target.characterType === 'demon';
   target.alive = false;
+  nomination.executed = true;
   // Remove from the qualifying list so a later tie in the same day can't reference a resolved execution twice.
   session.resolvedNominationsToday = session.resolvedNominationsToday.filter((r) => r.targetId !== nomination.targetId);
   return { targetPlayerId: target.playerId, wasDemon };
@@ -122,7 +130,7 @@ export function resetForNewDay(session: GameSession): void {
   session.resolvedNominationsToday = [];
 }
 
-export function toNominationView(nomination: ActiveNomination): ActiveNominationView {
+export function toNominationView(session: GameSession, nomination: ActiveNomination): ActiveNominationView {
   return {
     nominationId: nomination.id,
     nominatorId: nomination.nominatorId,
@@ -130,5 +138,8 @@ export function toNominationView(nomination: ActiveNomination): ActiveNomination
     votes: [...nomination.votes.entries()].map(([playerId, voting]) => ({ playerId, voting })),
     closed: nomination.closed,
     pendingExecution: nomination.pendingExecution,
+    executed: nomination.executed,
+    votesFor: tally(nomination),
+    threshold: executionThreshold(session),
   };
 }

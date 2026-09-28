@@ -31,6 +31,8 @@ export interface ActiveNomination {
   closed: boolean;
   pendingExecution: boolean;
   resolvedTally: number | null;
+  /** Set once StorytellerConfirmExecution has actually run for this nomination, to make it idempotent. */
+  executed: boolean;
 }
 
 export interface ChatMessage {

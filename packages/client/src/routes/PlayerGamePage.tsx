@@ -5,6 +5,7 @@ import type { SessionState } from '../hooks/useSession.js';
 import { CharacterCard } from '../components/character/CharacterCard.js';
 import { NominationBar } from '../components/voting/NominationBar.js';
 import { VoteTally } from '../components/voting/VoteTally.js';
+import { LastNominationOutcome } from '../components/voting/LastNominationOutcome.js';
 import { EvilChatPanel } from '../components/chat/EvilChatPanel.js';
 import { OpenChatPanel } from '../components/chat/OpenChatPanel.js';
 import { RulesReferencePanel } from '../components/onboarding/RulesReferencePanel.js';
@@ -44,7 +45,14 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
   const distribution = session.distribution;
   const isEvil = distribution?.role === 'player' && distribution.alignment === 'evil';
   const gameEnded = session.phase === 'ended';
-  const canNominate = session.phase === 'day' && session.alive && !session.nomination;
+  const selfPlayer = session.lobbyPlayers.find((p) => p.playerId === selfPlayerId);
+  const hasNominatedToday = selfPlayer?.hasNominatedToday ?? false;
+  // A nomination only blocks a NEW nomination while it's still open (or
+  // awaiting the Storyteller's execution decision). Once it's closed and
+  // either failed or has been executed, the Town Square is free again --
+  // this is what was dead-ending the game after the first vote of the day.
+  const nominationOpen = !!session.nomination && (!session.nomination.closed || session.nomination.pendingExecution);
+  const canNominate = session.phase === 'day' && session.alive && !hasNominatedToday && !nominationOpen;
   const canVote = session.phase === 'day' && !session.nomination?.closed && !gameEnded;
 
   function nominate(targetPlayerId: string) {
@@ -162,21 +170,27 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
       {tab === 'town' && (
         <div>
           <SeatingCirclePanel players={session.lobbyPlayers} selfPlayerId={selfPlayerId} />
-          {session.nomination ? (
+          {nominationOpen && session.nomination && (
             <VoteTally
               nomination={session.nomination}
               players={session.lobbyPlayers}
               selfPlayerId={selfPlayerId}
               canVote={canVote}
+              selfAlive={session.alive}
               onVote={vote}
             />
-          ) : (
+          )}
+          {!nominationOpen && (
             <NominationBar
               players={session.lobbyPlayers}
               selfPlayerId={selfPlayerId}
               canNominate={canNominate}
+              hasNominatedToday={hasNominatedToday}
               onNominate={nominate}
             />
+          )}
+          {!nominationOpen && session.nomination && (
+            <LastNominationOutcome nomination={session.nomination} players={session.lobbyPlayers} />
           )}
         </div>
       )}

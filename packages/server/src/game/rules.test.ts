@@ -8,6 +8,9 @@ function makeSession(n: number) {
   for (let i = 0; i < n; i++) {
     store.addPlayer(session, `p${i}`, `Player${i}`);
   }
+  // Nominations/votes are only legal during the day phase; every test in
+  // this file exercises day-phase mechanics.
+  session.phase = 'day';
   return session;
 }
 

@@ -18,6 +18,7 @@ export interface LobbyPlayer {
   connected: boolean;
   alive: boolean;
   seatIndex: number;
+  hasNominatedToday: boolean;
 }
 
 export interface ChatMessageView {

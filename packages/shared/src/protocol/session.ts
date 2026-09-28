@@ -15,6 +15,8 @@ export interface LobbyPlayerSummary {
   connected: boolean;
   /** Position around the seating circle, 0-indexed clockwise. Public info — seating is visible to everyone. */
   seatIndex: number;
+  /** Whether this player has already used their one nomination for the current day. Public — everyone at the table can see who has nominated. */
+  hasNominatedToday: boolean;
 }
 
 /** Full Grimoire entry — Storyteller-only. */
@@ -67,6 +69,22 @@ export interface ActiveNominationView {
   votes: NominationVote[];
   closed: boolean;
   pendingExecution: boolean;
+  /** True once StorytellerConfirmExecution has actually resolved this nomination. */
+  executed: boolean;
+  /** Current count of yes-votes, included so clients don't have to recompute it from `votes`. */
+  votesFor: number;
+  /** ceil(livingPlayers / 2) at the moment this nomination was opened -- the number of yes-votes needed to pass. */
+  threshold: number;
+}
+
+/** The most recently resolved nomination for the current day, kept visible even after a new nomination opens. */
+export interface LastNominationResult {
+  targetId: string;
+  nominatorId: string;
+  votesFor: number;
+  threshold: number;
+  pendingExecution: boolean;
+  executed: boolean;
 }
 
 /** A single entry in the post-night question queue (public — who asked and the answer are visible to all). */

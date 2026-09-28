@@ -42,6 +42,8 @@ export const Errors = {
     new ClocktowerError('NO_ACTIVE_NOMINATION', 'There is no open nomination to vote on.', 404),
   nominationClosed: () =>
     new ClocktowerError('NOMINATION_CLOSED', 'Voting has already closed on this nomination.', 403),
+  nominationAlreadyExecuted: () =>
+    new ClocktowerError('NOMINATION_ALREADY_EXECUTED', 'This nomination has already been executed.', 403),
   noDeadVoteRemaining: () =>
     new ClocktowerError('NO_DEAD_VOTE_REMAINING', "You've already used your one vote as a ghost.", 403),
   notInEvilChat: () =>
