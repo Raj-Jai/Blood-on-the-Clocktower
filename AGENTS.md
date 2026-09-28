@@ -11,18 +11,23 @@ npm install
 npm run build --workspace=packages/shared   # REQUIRED FIRST — see below
 npm run dev:server                          # tsx watch, :3001
 npm run dev:client                          # vite :5173, proxies /api + /socket.io to :3001
-bash /tmp/restart-otc.sh                    # rebuild shared+server, restart detached :3001
+bash tools/playtest/restart-server.sh       # rebuild shared+server, restart detached :3001
 ```
+
+`tools/playtest/restart-server.sh` is committed, so it survives a reboot. It **fails loudly on a
+build error and kills the old `:3001` before starting a new one** — an earlier `/tmp` version
+printed a success line even when the build had failed, which left a stale server answering while
+the log claimed a fresh one. Do not go back to trusting a restart without checking the build ran.
 
 Per-package tests (this is the form that works):
 
 ```bash
-npx vitest run --root packages/shared    # 35 tests
-npx vitest run --root packages/server    # 171
+npx vitest run --root packages/shared    # 42 tests
+npx vitest run --root packages/server    # 216 (19 files)
 npx vitest run --root packages/client    # 70
 ```
 
-Two traps:
+Three traps:
 
 - **`npm test` at the root is broken.** It fails on the client because
   `NODE_OPTIONS=--no-webstorage` (`packages/client/package.json:10`) is rejected by Node 22.21.1
@@ -31,6 +36,10 @@ Two traps:
   through `main`/`types` to `dist`, and `dist/` is gitignored. On a fresh clone the server build
   and server tests fail until `npm run build --workspace=packages/shared` has run. A green server
   suite after editing `shared` means nothing if you skipped that build.
+
+- **Run the server tests one file at a time, or with a single worker.** The full suite in one
+  process peaked around 3.9 GB. `npx vitest run --root packages/server src/game/nightEngine.test.ts`
+  is the form that survives.
 
 There is **no lint or formatter** (no eslint/prettier anywhere). Typecheck is
 `npm run typecheck --workspace=packages/<pkg>`; `npm run build --workspace=packages/client` runs
@@ -96,12 +105,35 @@ Conventions that differ from defaults:
   player's data; night info is not in an `aria-live` region.
 - **A test has to drive the path the bug actually lived on.** A duplicate-log bug survived because
   the test called the resolver directly and skipped the line that duplicated it.
+- **Dead code does not fail, it just looks correct.** `virginTriggersExecution` and `slayerWouldKill`
+  were written, exported and called by *nothing* for the app's whole life. The instant the Slayer was
+  wired up it broke the day's central mechanic, because the predicate never checked that the player
+  nominating *was* the Slayer. If a predicate has no caller, either wire it up or delete it — and
+  when you wire it up, the existing end-game tests are the thing that will tell you.
+- **One owner for the execution bookkeeping.** `applyExecution` in `game/rules.ts` spends the day's
+  one execution and writes `executedToday`, so the Mayor, the Undertaker and the vote path cannot
+  disagree. The Virgin's ability routes through it because its text is *"executed immediately"*; the
+  Slayer's kill deliberately does **not**, because a character ability is not a town execution, and
+  conflating the two hands Evil a win they did not earn.
+- **What a payload may never carry is enforced by its type, not by discipline.**
+  `OwnCharacterPayload.teammates` has a `playerId` and a `displayName` and deliberately **no
+  character field** — "you learn who the other Minions are" is a list of names, and only at 7+
+  players. Every Evil player used to be sent every other Evil player's true character name. Keep
+  `buildPlayerDistributionPayload` returning `OwnCharacterPayload` and not the wider
+  `DistributionPayload` union: the wide type is why that field was untouchable and therefore untested.
+- **A test whose name asserts a rule it does not check is worse than no test.** One was called
+  *"returns the official First Night order"* and asserted an order that put the Poisoner fifth of
+  seven, after every information role had been told the truth — so it made the bug look like a
+  decision. Three more held stale copies of the Empath's ability strings, which is how the app
+  drifted to British "neighbours" while the official card says "neighbors". Assert against the thing
+  the app actually reads, never a copy of it.
 
 ## Verifying real behaviour
 
-Unit tests cannot tell you whether a game is playable. `tools/playtest/` (untracked, actively being
-built — check what is there) drives real browser windows through the real UI, clicking real buttons
-and reading real DOM. Start the server (`:3001`) and the client (`:5173`) first.
+Unit tests cannot tell you whether a game is playable. `tools/playtest/` drives real browser
+windows through the real UI, clicking real buttons and reading real DOM. It is committed, and
+`tools/playtest/README.md` lists the probes and what each one proves. Start the server (`:3001`)
+and the client (`:5173`) first.
 
 ```bash
 node tools/playtest/smoke.mjs                                  # harness self-test; run first
@@ -110,9 +142,13 @@ SCENARIO=vote node tools/playtest/scenarios.mjs
 ```
 
 Playwright is not a dependency; `table.mjs` resolves it from `PLAYWRIGHT_PATH` or the npx cache and
-throws with instructions if it can't. An older socket-only harness still lives in `/tmp/play`
-(`SIZES=5,15 GAMES=2 node /tmp/play/sweep.mjs`, `NIGHTS=3 node /tmp/play/ui-game.mjs`) — outside the
-repo, so it may be gone.
+throws with instructions if it can't. The older socket-only harness that used to live in `/tmp/play`
+is **gone** — do not go looking for it. `tools/playtest/scenarios.mjs` and `sweep`-style coverage
+are the replacements; the UI-only rule below is why a socket-only harness was never a substitute.
+
+Probes write screenshots to `tools/playtest/shots/`, which is **gitignored** — a sweep is a few
+hundred MB. The five the fix log embeds are copied to `tools/playtest/report-shots/` and committed,
+so `summary.html` renders from a clean clone.
 
 Harness rules, both learned by wasting an hour:
 
@@ -137,20 +173,22 @@ deploys separately by hand. `npm run build` at the root orders shared → server
 
 ## Repo docs: what to trust
 
-- `MEMORY.md` — current working standards and the reasoning behind them. Read it; keep it accurate
-  (it is a bit behind on the harness, which has partly moved into `tools/playtest/`).
-- `ISSUES.md`, `PROMPT-issue2-night-engine.md` — **untracked, historical.** `ISSUES.md` is an audit
-  written ~11 commits ago and its `file:line` citations are now wrong; the issue-2 prompt was
-  executed and superseded (its checkboxes are unticked but the work is committed). Don't follow
-  either as a task list. Two rules from the prompt still bind: the information-hiding invariant and
-  the TTS/accessibility rules.
+- `MEMORY.md` — current working standards and the reasoning behind them. Read it; keep it accurate.
+- `PLAYTEST.md` — **the play-derived bug report, and the record of what is fixed.** All 20 findings
+  from the original audit are closed; the summary table's `Status` column says how, and the detail
+  sections are kept as a record of what was wrong rather than as current behaviour. Start here.
+- `ISSUES.md`, `PROMPT-issue2-night-engine.md` — **untracked, historical, and now banner-marked
+  stale.** `ISSUES.md` is an audit written ~19 commits ago whose `file:line` citations are wrong and
+  whose findings are all fixed; the issue-2 prompt was executed and superseded. Don't follow either
+  as a task list. Two rules from the prompt still bind: the information-hiding invariant and the
+  TTS/accessibility rules.
 - `.kiro/specs/clocktower-web-app/` — frozen initial spec, contradicted by the code (it scopes out
   ability logic the Night Engine now owns, and specifies a player tab bar that was deliberately
   removed). Not a source of truth.
-- Open gaps are tracked in code, not in those docs: `FIXME(issue #2 follow-up)` in
-  `server/src/game/winConditions.ts:33` (Scarlet Woman threshold — official text is "5 or more"),
-  and the Storyteller-connect broadcast at `server/src/gateway/index.ts:273` still emits to the raw
-  session code instead of `sessionRoom()`, so players get no connection signal.
+- **There are no open gaps tracked in code any more.** This file used to end by pointing at a
+  `FIXME` for the Scarlet Woman threshold and at a Storyteller-connect broadcast that emitted to the
+  raw session code. Both are fixed, so ignore any recollection of them; `git log` has the commits.
 
-Branch note: work happens on `feature/night-engine`; `main` is 17 commits behind and does not
-contain the night engine. Do not assume `main` has the app.
+Branch note: work happens on `feature/night-engine`, which is **19 commits ahead of `main`** and has
+no upstream. `main` is an ancestor, so it is a clean fast-forward rather than a merge — but `main`
+does not contain the night engine or anything above it, so do not assume `main` has the app.
