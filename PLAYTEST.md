@@ -7,7 +7,13 @@ clicking through the real app in a real browser window and watching what happene
 **Confirmed by reading** come from a static audit and have *not* been reproduced end to end — treat
 those as leads, not verdicts.
 
-> **STATUS: all 20 findings are now closed.** Every one has been fixed, covered by a test, and
+> **A SECOND AUDIT NOW EXISTS AND CONTRADICTS THIS ONE.** [`AUDIT.md`](AUDIT.md) is a
+> rules and information-hiding audit run afterwards by seven parallel reviewers. It found **28
+> further defects, 9 of them P0** — including that a Ravenkeeper's wake has no reachable control,
+> that the Imp self-kill still hands the new Demon the whole Evil script, and that the
+> 1-of-2 characters' target picker shows the player exactly who holds their type. Read that first.
+>
+> **STATUS: all 20 findings below are closed.** Every one has been fixed, covered by a test, and
 > re-verified by playing it in the browser. The `Status` column in the summary says how. The write-ups
 > below are kept as the record of what was wrong — do not read them as current behaviour.
 > See [What was fixed](#what-was-fixed-and-how-it-was-verified) for the current state.

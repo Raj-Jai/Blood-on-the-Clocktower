@@ -174,6 +174,10 @@ deploys separately by hand. `npm run build` at the root orders shared → server
 ## Repo docs: what to trust
 
 - `MEMORY.md` — current working standards and the reasoning behind them. Read it; keep it accurate.
+- `AUDIT.md` — **the second, larger audit: 28 defects, 9 of them P0, none of them fixed.** Seven
+  parallel reviewers, split by character group / mechanic / layer. It contradicts `PLAYTEST.md` on
+  the Fortune Teller's red herring, which `PLAYTEST.md` wrongly records as "not a bug". Read it
+  before starting anything: most of what it finds is in code written in the last three commits.
 - `PLAYTEST.md` — **the play-derived bug report, and the record of what is fixed.** All 20 findings
   from the original audit are closed; the summary table's `Status` column says how, and the detail
   sections are kept as a record of what was wrong rather than as current behaviour. Start here.
