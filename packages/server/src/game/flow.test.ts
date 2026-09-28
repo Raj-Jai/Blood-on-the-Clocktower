@@ -58,26 +58,35 @@ function walkPast(session: GameSession, count: number): void {
 function contextFor(playerId: string, overrides: Partial<PlayerFlowContext> = {}): PlayerFlowContext {
   return {
     playerId,
+    displayName: 'Somebody',
     alive: true,
     hasOpenNightPrompt: false,
     hasSubmittedNightChoice: false,
     isEvil: false,
     stepIsUnmakeable: false,
+    hasNightResult: false,
+    hasVoteToken: true,
     ...overrides,
   };
 }
 
 describe('buildFlowState — night', () => {
   /**
-   * A night with the Monk, Poisoner and Imp all awake, so every choice-walking
-   * test has something to walk through. `firstNight = false` opens NIGHT TWO,
-   * which is when the Monk wakes.
+   * A night with the Poisoner, Monk and Imp all awake, so every choice-walking test
+   * has something to walk through. `firstNight = false` opens NIGHT TWO, which is when
+   * the Monk wakes.
+   *
+   * The Poisoner is seated FIRST deliberately. It is the first waker on the official
+   * night sheet, so putting it at p0 makes these tests walk a real night's opening
+   * rather than an accidental one. It used to be seated third, and the tests passed
+   * only because the old order happened to put the Monk first — which is how the
+   * inverted night order went unnoticed here.
    */
   function nightSession(firstNight = false) {
     const { session, players } = makeSession(5);
-    setCharacter(players[0]!, 'monk');
-    setCharacter(players[1]!, 'imp');
-    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[0]!, 'poisoner');
+    setCharacter(players[1]!, 'monk');
+    setCharacter(players[2]!, 'imp');
     setCharacter(players[3]!, 'chef');
     setCharacter(players[4]!, 'recluse');
     session.phase = 'night';
@@ -122,13 +131,25 @@ describe('buildFlowState — night', () => {
   });
 
   it('moves to the next person who owes a choice as choices come in', () => {
+    // Night two in the official order: Poisoner 1, Monk 2, Imp 3 — all three pickers,
+    // in that order. It used to be Empath 1, FT 2, Monk 4, Butler 6, Poisoner 7, Imp 9,
+    // so the first two wakers owed nothing and this test started at a different point
+    // than the walk actually began at.
     const { session, players } = nightSession();
     session.currentNight!.briefed = true;
+    expect(buildFlowState(session).needsChoiceFromPlayerId).toBe(players[0]!.playerId);
+
     submitNightChoice(session, players[0]!.playerId, [players[4]!.playerId]);
-    const flow = buildFlowState(session);
+    let flow = buildFlowState(session);
+    expect(flow.needsChoiceFromPlayerId).toBe(players[1]!.playerId);
+    expect(flow.announcement).toBe('Player1, wake up.');
+    expect(flow.resolvedCount).toBe(1);
+
+    submitNightChoice(session, players[1]!.playerId, [players[4]!.playerId]);
+    flow = buildFlowState(session);
     expect(flow.needsChoiceFromPlayerId).toBe(players[2]!.playerId);
     expect(flow.announcement).toBe('Player2, wake up.');
-    expect(flow.resolvedCount).toBe(1);
+    expect(flow.resolvedCount).toBe(2);
   });
 
   it('is ready to resolve once every choice is in', () => {
@@ -211,25 +232,33 @@ describe('buildFlowState — day', () => {
     // swallowed real information. The Chef and Empath are woken, given a number
     // and put back to sleep exactly like everyone else.
     const { session, players } = makeSession(5);
-    setCharacter(players[0]!, 'chef'); // 4 on night one, no pick
-    setCharacter(players[1]!, 'imp');
-    setCharacter(players[2]!, 'poisoner');
-    setCharacter(players[3]!, 'empath'); // 5 on night one, no pick
+    /*
+     * Seated in the official first-night order: Poisoner 1, Chef 5, Empath 6, Imp 10.
+     * So the walk opens on the Poisoner, who OWES a choice, and the two characters
+     * with nothing to pick are woken after them. That is the point of the test: the
+     * walk must visit every waker, including the ones who are only being told
+     * something. The old order put the Chef and Empath first, so the pickers came
+     * after and the walk's behaviour around a mid-walk picker was never exercised here.
+     */
+    setCharacter(players[0]!, 'chef'); // order 5 on night one, no pick
+    setCharacter(players[1]!, 'empath'); // order 6 on night one, no pick
+    setCharacter(players[2]!, 'poisoner'); // order 1, picks
+    setCharacter(players[3]!, 'imp'); // order 10, picks
     setCharacter(players[4]!, 'recluse');
     session.phase = 'night';
     session.nightNumber = 0;
     openNight(session);
     session.currentNight!.briefed = true;
 
-    expect(buildFlowState(session).announcement).toBe('Player0, wake up.');
-
-    // The Chef has nothing to choose, so the Storyteller deals with them and the
-    // walk moves to the Empath (order 5) — the next waker — rather than skipping
-    // to the next player who happens to make a choice.
-    walkPast(session, 1);
-    expect(buildFlowState(session).announcement).toBe('Player3, wake up.');
-    walkPast(session, 1);
     expect(buildFlowState(session).announcement).toBe('Player2, wake up.');
+
+    // Submitting a choice moves the cursor on to the next WAKER, which is the Chef —
+    // who has nothing to choose. The walk does not skip to the next player who makes a
+    // choice, because the Chef is being told something the table needs to hear.
+    submitNightChoice(session, players[2]!.playerId, [players[4]!.playerId]);
+    expect(buildFlowState(session).announcement).toBe('Player0, wake up.');
+    walkPast(session, 1);
+    expect(buildFlowState(session).announcement).toBe('Player1, wake up.');
   });
 
   it('owes a choice only to the player who is AWAKE, not to whoever is queued', () => {
@@ -238,30 +267,41 @@ describe('buildFlowState — day', () => {
     // a picker with nothing in it — their answer arrives at dawn.
     const { session, players } = makeSession(5);
     setCharacter(players[0]!, 'chef');
-    setCharacter(players[1]!, 'imp');
+    setCharacter(players[1]!, 'empath');
     setCharacter(players[2]!, 'poisoner');
-    setCharacter(players[3]!, 'empath');
+    setCharacter(players[3]!, 'imp');
     setCharacter(players[4]!, 'recluse');
     session.phase = 'night';
     session.nightNumber = 0;
     openNight(session);
     session.currentNight!.briefed = true;
-    // First night order: Chef 4, Empath 5, Poisoner 8, Imp 10.
-    expect(buildFlowState(session).activePlayerName).toBe('Player0');
-    expect(buildFlowState(session).needsChoiceFromPlayerId).toBeNull();
+    // First night: Poisoner 1, Chef 5, Empath 6, Imp 10. The Poisoner is awake first
+    // and DOES owe a choice, so there is a picker here rather than only listeners.
+    expect(buildFlowState(session).activePlayerName).toBe('Player2');
+    expect(buildFlowState(session).needsChoiceFromPlayerId).toBe(players[2]!.playerId);
 
-    // The Chef is dealt with; the Empath is now awake and still owes nothing.
-    walkPast(session, 1);
-    const flow = buildFlowState(session);
-    expect(flow.activePlayerName).toBe('Player3');
+    // Submitting a choice moves the cursor to the next WAKER, which is the Chef. He is
+    // announced and NOT prompted: a picker with nothing in it is a control the server
+    // would refuse, and his information arrives at dawn instead.
+    submitNightChoice(session, players[2]!.playerId, [players[4]!.playerId]);
+    let flow = buildFlowState(session);
+    expect(flow.activePlayerName).toBe('Player0'); // the Chef
     expect(flow.needsChoiceFromPlayerId).toBeNull();
     expect(firstPlayerOwingAChoice(session)).toBeNull();
 
-    // Deal with the Empath and the Poisoner becomes the one who owes a choice.
+    // And the Empath, same again: woken, announced, not prompted.
     walkPast(session, 1);
-    expect(buildFlowState(session).activePlayerName).toBe('Player2');
-    expect(buildFlowState(session).needsChoiceFromPlayerId).toBe(players[2]!.playerId);
-    expect(firstPlayerOwingAChoice(session)?.playerId).toBe(players[2]!.playerId);
+    flow = buildFlowState(session);
+    expect(flow.activePlayerName).toBe('Player1');
+    expect(flow.needsChoiceFromPlayerId).toBeNull();
+    expect(firstPlayerOwingAChoice(session)).toBeNull();
+
+    // Past both, the Imp is awake and owes a choice again.
+    walkPast(session, 1);
+    flow = buildFlowState(session);
+    expect(flow.activePlayerName).toBe('Player3');
+    expect(flow.needsChoiceFromPlayerId).toBe(players[3]!.playerId);
+    expect(firstPlayerOwingAChoice(session)?.playerId).toBe(players[3]!.playerId);
   });
 
   it('is ready to resolve only once every waker has been dealt with', () => {
@@ -276,14 +316,24 @@ describe('buildFlowState — day', () => {
     openNight(session);
     session.currentNight!.briefed = true;
 
-    // First night: Chef 4, Empath 5, Poisoner 8, Imp 10.
-    walkPast(session, 2); // Chef, Empath
-    expect(buildFlowState(session).readyToResolve).toBe(false);
+    /*
+     * First night in the official order: Poisoner 1 (p1), Chef 5 (p3), Empath 6 (p2),
+     * Imp 10 (p0). The walk is walked in exactly that order, and the two characters
+     * with nothing to submit are dealt with by hand — which is the real mechanic and
+     * the thing this test exists to cover: an auto-resolving waker still has to be
+     * walked past before the night can resolve.
+     */
+    expect(buildFlowState(session).activePlayerName).toBe('Player1'); // Poisoner
     submitNightChoice(session, players[1]!.playerId, [players[4]!.playerId]);
-    finishWake(session, players[1]!.playerId);
-    expect(buildFlowState(session).readyToResolve).toBe(false); // the Imp is still awake
+    expect(buildFlowState(session).activePlayerName).toBe('Player3'); // Chef, nothing to pick
+    expect(buildFlowState(session).readyToResolve).toBe(false);
+    walkPast(session, 1);
+    expect(buildFlowState(session).activePlayerName).toBe('Player2'); // Empath, nothing to pick
+    expect(buildFlowState(session).readyToResolve).toBe(false);
+    walkPast(session, 1);
+    expect(buildFlowState(session).activePlayerName).toBe('Player0'); // Imp, still owes a choice
+    expect(buildFlowState(session).readyToResolve).toBe(false);
     submitNightChoice(session, players[0]!.playerId, [players[4]!.playerId]);
-    finishWake(session, players[0]!.playerId);
     expect(buildFlowState(session).readyToResolve).toBe(true);
   });
 });
@@ -359,22 +409,27 @@ describe('the flow announcement never leaks', () => {
 describe('the pause between wakers', () => {
   function pausedSession(delaySeconds = 5) {
     const { session, players } = makeSession(5);
-    // Two auto-resolving wakers that actually wake on night two (Empath, order 1,
-    // and Undertaker, order 3) so there is something to walk past before the
-    // Poisoner at order 7. The Chef would NOT do here — it is first night only.
+    /*
+     * Seated in the order the official night sheet wakes them, so this walks a real
+     * night's opening: Poisoner (1), Monk (2), then the two characters with nothing to
+     * choose, Empath (5) and Undertaker (8). The Recluse never wakes.
+     *
+     * It used to be seated Poisoner, Imp, Undertaker, Empath with `walkPast(2)` to skip
+     * to the Poisoner, which only worked because the old order put the information roles
+     * FIRST. With the corrected order the first two wakers are pickers, so there is
+     * nothing to walk past: p0 is woken first, p1 second, and the two auto-resolvers
+     * follow.
+     */
     setCharacter(players[0]!, 'poisoner');
-    setCharacter(players[1]!, 'imp');
-    setCharacter(players[2]!, 'undertaker');
-    setCharacter(players[3]!, 'empath');
+    setCharacter(players[1]!, 'monk');
+    setCharacter(players[2]!, 'empath');
+    setCharacter(players[3]!, 'undertaker');
     setCharacter(players[4]!, 'recluse');
     session.phase = 'night';
     session.nightNumber = 1;
     openNight(session);
     session.currentNight!.briefed = true;
     session.currentNight!.delaySeconds = delaySeconds;
-    // Deal with the Empath and the Chef, who wake before the Poisoner and have
-    // nothing to choose. Without this the Poisoner could never be reached.
-    walkPast(session, 2);
     return { session, players };
   }
 

@@ -146,6 +146,14 @@ export function NightPromptPanel({
               >
                 {submitted ? 'Choice sent' : 'Send my choice'}
               </button>
+              {/* A disabled control is the app telling the player no, and it used to do
+                  that silently — which is the one thing a phone player at a table can
+                  least afford. Say why instead. */}
+              {!submitted && !canSubmit && prompt.targetCount > 0 && (
+                <p className="faint" style={{ marginTop: 8 }}>
+                  Pick {prompt.targetCount} player{prompt.targetCount === 1 ? '' : 's'} first.
+                </p>
+              )}
               {submitted && <p className="faint" style={{ marginTop: 8 }}>Waiting for the other players…</p>}
             </div>
           )}
@@ -167,7 +175,8 @@ export function NightPromptPanel({
           {result.overridden && <p className="faint">The Storyteller adjusted this for you.</p>}
           {result.infoType === 'grimoire' && (
             <p className="faint">
-              Your Grimoire is on your Character tab. It is never read aloud.
+              Your Grimoire is shown on your own screen, below your result. It is never read aloud and never
+              sent to anyone else.
             </p>
           )}
         </div>

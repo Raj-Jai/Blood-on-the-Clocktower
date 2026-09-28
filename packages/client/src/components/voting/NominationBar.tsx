@@ -16,7 +16,16 @@ export function NominationBar({ players, selfPlayerId, canNominate, onNominate }
   // A player gets one nomination a day, and the server refuses a second. Saying so
   // here is better than letting someone press the button and be rejected.
   const alreadyNominated = players.find((p) => p.playerId === selfPlayerId)?.hasNominatedToday ?? false;
-  const blocked = alreadyNominated || !canNominate;
+  /*
+   * "Each player may nominate only once per day, and each player may be nominated only
+   * once per day." The nominee's half used to go entirely unenforced — the server
+   * accepted a second nomination of the same person all day — so a failed vote could be
+   * re-run on one player repeatedly. Now the server refuses it, which means the client
+   * has to stop offering them, or we have replaced one bug with an error toast.
+   */
+  const alreadyBeenNominated = players.find((p) => p.playerId === targetId)?.hasBeenNominatedToday ?? false;
+  // A day with an execution in it is over, so nothing more can be put to a vote.
+  const blocked = alreadyNominated || !canNominate || (Boolean(targetId) && alreadyBeenNominated);
 
   function reset() {
     setTargetId('');
@@ -29,7 +38,14 @@ export function NominationBar({ players, selfPlayerId, canNominate, onNominate }
       {alreadyNominated && !canNominate && (
         <p className="faint">You have already nominated today. You get one nomination a day.</p>
       )}
-      {!canNominate && !alreadyNominated && <p className="faint">You can't nominate right now.</p>}
+      {alreadyBeenNominated && (
+        <p className="faint">
+          {targetName} has already been nominated today, so they cannot be nominated again.
+        </p>
+      )}
+      {!canNominate && !alreadyNominated && !alreadyBeenNominated && (
+        <p className="faint">You can't nominate right now.</p>
+      )}
 
       {confirming && targetId ? (
         <div>

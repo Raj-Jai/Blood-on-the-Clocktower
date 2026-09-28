@@ -19,7 +19,16 @@ export type TargetRestriction =
   | 'minion'
   | 'demon'
   | 'evil'
-  | 'good';
+  | 'good'
+  /**
+   * The true character type is neither a Minion nor the Demon.
+   *
+   * Deliberately NOT expressible as `good`: that one is `perceivedAs().alignment`, so a
+   * Recluse registering as Evil would be excluded, and reading `alignment` to decide
+   * legality is how a secret gets rendered into a UI. This is the Butler's rule, and it
+   * is about the real character.
+   */
+  | 'not-demon-or-minion';
 
 export interface CharacterDefinition {
   id: string;

@@ -2,7 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      `viewport-fit=cover` is required for `env(safe-area-inset-bottom)` to resolve to
+      anything but 0. Without it the stylesheet's bottom padding silently collapses
+      and the "More" button and the error toast sit underneath a notched phone's home
+      indicator — a player cannot tap the control that opens everything else.
+      `theme-color` and the web-app metas are here so a player can add the game to
+      their home screen, which is the difference between having it awake at 1am and
+      hunting for a browser tab in the dark.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b0b12" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta
+      name="description"
+      content="A real-time companion app for running Blood on the Clocktower with a Storyteller and players on their own phones."
+    />
     <title>Blood on the Clocktower</title>
   </head>
   <body>

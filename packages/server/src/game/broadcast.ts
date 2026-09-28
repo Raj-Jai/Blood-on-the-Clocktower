@@ -71,6 +71,13 @@ export function broadcastLobby(io: SocketIOServer, session: GameSession): void {
     // is visible at a real table — and it lets a client stop offering a control the
     // server will refuse, instead of letting the player find out by being rejected.
     hasNominatedToday: p.hasNominatedToday,
+    // Both are day/game-scoped facts the client needs so it can stop offering a control
+    // the server will refuse. Without `hasBeenNominatedToday` a player can still be
+    // picked again on a day the rules have already closed for them, and without
+    // `usedDeadVote` a dead player is handed a live "Vote to Execute" every day for the
+    // rest of the game after spending their one vote.
+    hasBeenNominatedToday: p.hasBeenNominatedToday,
+    usedDeadVote: p.usedDeadVote,
   }));
   io.to(sessionRoom(session.code)).emit(ServerEvents.LobbyUpdate, { players });
 }

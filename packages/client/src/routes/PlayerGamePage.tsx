@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ClientEvents, derivePlayerMoment, type PlayerFlowContext } from '@clocktower/shared';
 import type { Socket } from 'socket.io-client';
 import type { SessionState } from '../hooks/useSession.js';
@@ -18,6 +18,8 @@ import { QuestionQueuePanel } from '../components/questions/QuestionQueuePanel.j
 import { RoleReferenceSection } from '../components/reference/RoleReferenceSection.js';
 import { NightPromptPanel } from '../components/grimoire/NightPromptPanel.js';
 import { PlayerMomentCard } from '../components/flow/PlayerMomentCard.js';
+import { useDialogBehaviour, backdropClick } from '../hooks/useDialogBehaviour.js';
+import { useWakeAlert, vibrationEnabledByDefault, type WakeUrgency } from '../hooks/useWakeAlert.js';
 
 interface PlayerGamePageProps {
   socket: Socket | null;
@@ -55,6 +57,10 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
   // information that must not be left sitting on a passed-around screen.
   const [dismissedResult, setDismissedResult] = useState<string | null>(null);
   const speech = useSpeech();
+  // Escape, backdrop tap and focus handling for the "More" sheet. See
+  // useDialogBehaviour for why this is not optional on something claiming aria-modal.
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  useDialogBehaviour(moreOpen, () => setMoreOpen(false), sheetRef);
 
   const distribution = session.distribution;
   const isEvil = distribution?.role === 'player' && distribution.alignment === 'evil';
@@ -66,12 +72,30 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
   // game where the vote did not reach the threshold.
   const voteOpen = Boolean(session.nomination && !session.nomination.closed);
   const nominatedToday = session.lobbyPlayers.find((p) => p.playerId === selfPlayerId)?.hasNominatedToday ?? false;
-  const canNominate = session.phase === 'day' && session.alive && !voteOpen && !nominatedToday;
-  const canVote = session.phase === 'day' && !session.nomination?.closed && !gameEnded;
+  const spentDeadVote = session.lobbyPlayers.find((p) => p.playerId === selfPlayerId)?.usedDeadVote ?? false;
+  // This player's own name, so a moment can address them directly. Public: the seating
+  // list is on every player's screen, and the app already says "Bram, wake up".
+  const selfDisplayName =
+    session.lobbyPlayers.find((p) => p.playerId === selfPlayerId)?.displayName ?? '';
+  // A nomination that has passed is waiting to be executed, so the day is closed to
+  // nominations until the Storyteller confirms it. Offering the control here would let a
+  // player silently destroy a pending execution — the server refuses it, but a control
+  // the server would refuse is a bug even when the server refuses it correctly.
+  const executionPending = Boolean(session.nomination?.pendingExecution);
+  const canNominate = session.phase === 'day' && session.alive && !voteOpen && !nominatedToday && !executionPending;
+  // A dead player gets ONE vote for the rest of the game, not one a day. The server
+  // enforces that, and used to be the only thing that did — so the client kept handing
+  // out a live "Vote to Execute" that could only ever come back as an error.
+  const canVote =
+    session.phase === 'day' &&
+    !session.nomination?.closed &&
+    !gameEnded &&
+    !(session.alive === false && spentDeadVote);
   const showAbilityResult = Boolean(session.abilityResult) && session.abilityResult !== dismissedResult;
 
   const context: PlayerFlowContext = {
     playerId: selfPlayerId,
+    displayName: selfDisplayName,
     alive: session.alive,
     hasOpenNightPrompt: Boolean(session.nightPrompt),
     hasSubmittedNightChoice: Boolean(session.nightResult),
@@ -82,8 +106,25 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
       distribution?.role === 'player' &&
       session.flow.unmakeableSteps.some((u) => u.characterName === distribution.characterName),
     isEvil,
+    // Whether the server has sent THIS player's overnight information. It used to be
+    // computed and then hidden, so the app never once told anybody what they learned.
+    hasNightResult: Boolean(session.nightResult),
+    // A living player always has a vote. A dead one has exactly one, for the rest of
+    // the game, and this is the fact the client was never told.
+    hasVoteToken: session.alive || !spentDeadVote,
   };
   const moment = derivePlayerMoment(session.flow, context);
+
+  /*
+   * The alarm. Without this the only thing that ever told a player they had been woken
+   * was a border colour and two words changing on a screen they might not be looking
+   * at — so the Storyteller had to shout their name, which is the ritual this app
+   * exists to replace. See useWakeAlert for why this is title + vibration and not a
+   * web notification.
+   */
+  const wakeUrgency: WakeUrgency =
+    moment.kind === 'awake-choose' ? 'choose' : moment.kind === 'dead' || moment.action === 'vote' ? 'day' : 'other';
+  useWakeAlert({ urgency: wakeUrgency, vibrateEnabled: vibrationEnabledByDefault() });
 
   function nominate(targetPlayerId: string) {
     socket?.emit(ClientEvents.PlayerNominate, { targetPlayerId });
@@ -215,6 +256,10 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
           aria-modal="true"
           aria-label="Everything else"
           data-testid="more-sheet"
+          ref={(el) => {
+            sheetRef.current = el;
+          }}
+          onClick={backdropClick(sheetRef, () => setMoreOpen(false))}
           style={{
             position: 'fixed',
             inset: 0,
@@ -284,18 +329,48 @@ export function PlayerGamePage({ socket, session, selfPlayerId }: PlayerGamePage
                     <p style={{ marginBottom: 0 }}>{session.abilityResult}</p>
                   </div>
                 )}
+                {/*
+                  Last night's information, kept readable all day.
+
+                  It is in the moment card for the two beats that matter — the moment
+                  the night resolves, and dawn while the table reads the Grimoire — and
+                  then the day's instruction takes over, because "what do I do now"
+                  outranks "what did I learn" once the table is talking. It must not
+                  simply vanish, though: an Empath comparing last night's number with
+                  tonight's is the whole reason this character is interesting, and the
+                  phone is being passed around a table.
+                */}                {distribution?.role === 'player' && session.lastNightResult && moment.kind !== 'night-result' && (
+                  <div className="panel">
+                    <h3 style={{ marginTop: 0 }}>
+                      Last night — {session.lastNightResult.characterName}
+                    </h3>
+                    <p className="faint" style={{ marginTop: 0 }}>
+                      Night {session.lastNightResult.nightNumber}
+                    </p>
+                    <p style={{ marginBottom: 0 }}>{session.lastNightResult.text}</p>
+                    {session.lastNightResult.overridden && (
+                      <p className="faint">The Storyteller adjusted this for you.</p>
+                    )}
+                  </div>
+                )}
+                {/*
+                  Identities, never characters. "You learn who the other Minions are" is a
+                  list of names, so that is all this renders — the payload has no character
+                  field to show even if something tried to.
+                */}
                 {isEvil && distribution.teammates && distribution.teammates.length > 0 && (
                   <div className="panel" style={{ borderColor: 'var(--evil-red)' }}>
                     <h3 style={{ marginTop: 0 }} className="alignment-evil">
-                      Your Fellow Evil Players
+                      The Other Minions
                     </h3>
                     <ul>
                       {distribution.teammates.map((t) => (
-                        <li key={t.playerId}>
-                          {t.displayName} — {t.characterName}
-                        </li>
+                        <li key={t.playerId}>{t.displayName}</li>
                       ))}
                     </ul>
+                    <p className="faint" style={{ marginBottom: 0 }}>
+                      You learn who they are, not what they are.
+                    </p>
                   </div>
                 )}
                 {isEvil && distribution.bluff && (

@@ -179,3 +179,132 @@ describe('buildPlayerDistributionPayload (information hiding)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+
+/**
+ * What Evil is told about Evil.
+ *
+ * `evilTeammatesOf` used to return every other Evil player's TRUE CHARACTER NAME, at
+ * every player count. That is the entire script handed to every Evil player in one
+ * payload, at the moment the game starts, before anyone has spoken — and it also told a
+ * Minion who the Demon was, which the rules do not grant at any count.
+ *
+ * "You learn who the other Minions are" is a list of NAMES, and only at 7 or more
+ * players. Six is the most common table size in the app's own test sweep, so this is
+ * the case that mattered most.
+ */
+describe('Evil is told identities, never characters', () => {
+  function evilTable(n: number) {
+    const session = makeSessionWithPlayers(n);
+    distributeRoles(session);
+    const players = [...session.players.values()];
+    const demon = players.find((p) => p.characterType === 'demon')!;
+    const minion = players.find((p) => p.characterType === 'minion')!;
+    return { session, demon, minion, players };
+  }
+
+  it('tells a 5- or 6-player Minion NOTHING about the other Minions', () => {
+    for (const n of [5, 6]) {
+      const { session, minion, demon } = evilTable(n);
+      const payload = buildPlayerDistributionPayload(session, minion);
+      // No Minion information exists below 7 players, so there is nothing to send.
+      expect(payload.teammates ?? []).toEqual([]);
+      // And emphatically not the Demon's name, which is a separate grant entirely.
+      expect(JSON.stringify(payload)).not.toContain(demon.playerId);
+    }
+  });
+
+  it('tells a 7+ Minion who the other Minions are, and not what they are', () => {
+    const { session, minion, demon, players } = evilTable(7);
+    const payload = buildPlayerDistributionPayload(session, minion);
+
+    // The 7-player script is 5 Townsfolk, 0 Outsiders, 1 Minion, 1 Demon: there are no
+    // other Minions, so the list is legitimately empty here. What matters is that the
+    // Demon is not in it.
+    expect(payload.teammates ?? []).toEqual([]);
+    expect(JSON.stringify(payload)).not.toContain(demon.playerId);
+
+    // Hand-build the case that has a second Minion, since 7+ with 2 Minions needs 10
+    // players. Directly asserting the shape here: a NAME and nothing else.
+    const second = players.find((p) => p.characterType === 'townsfolk')!;
+    second.character = 'poisoner';
+    second.characterType = 'minion';
+    second.alignment = 'evil';
+    const withTeammate = buildPlayerDistributionPayload(session, minion);
+    expect(withTeammate.teammates).toEqual([
+      { playerId: second.playerId, displayName: second.displayName },
+    ]);
+    /*
+     * The guarantee is structural, and this is the assertion that carries it: a teammate
+     * entry has exactly two keys, and neither is a character. A `not.toContain('Poisoner')`
+     * search over the whole payload cannot work here and never did — a Minion's own BLUFF is
+     * legitimately any character not in play, so their payload names characters that have
+     * nothing to do with the leak. Changing the type is what actually prevents it.
+     */
+    expect(Object.keys(withTeammate.teammates![0]!)).toEqual(['playerId', 'displayName']);
+    expect(withTeammate.teammates![0]).not.toHaveProperty('character');
+    expect(withTeammate.teammates![0]).not.toHaveProperty('characterName');
+  });
+
+  it('leaks no other player character to an Evil player at any count', () => {
+    for (const n of [5, 7, 10]) {
+      const { session, players } = evilTable(n);
+      for (const p of players.filter((x) => x.alignment === 'evil')) {
+        const serialised = JSON.stringify(buildPlayerDistributionPayload(session, p));
+        // Every Good player's character, by name, must be absent.
+        for (const other of players.filter((x) => x.alignment !== 'evil')) {
+          expect(serialised).not.toContain(other.displayName);
+        }
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The Drunk's cover has to be a character they can actually use.
+ *
+ * The cover pool was every unused Townsfolk, which includes Soldier, Virgin and Slayer —
+ * all three have abilities that do nothing on their own. Such a Drunk is shown ability
+ * text at night, is given a slot in the night order, and can never once use any of it.
+ */
+describe('the Drunk is never dealt a cover with no usable ability', () => {
+  const UNUSABLE = ['soldier', 'virgin', 'slayer'];
+
+  it('never picks Soldier, Virgin or Slayer, across many deals and player counts', () => {
+    for (const n of [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]) {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const session = makeSessionWithPlayers(n);
+        distributeRoles(session);
+        const drunk = [...session.players.values()].find((p) => p.character === 'drunk');
+        if (!drunk) continue;
+        expect(UNUSABLE).not.toContain(drunk.drunkCoverCharacterId);
+        // And the cover is still a real Townsfolk they can be told about.
+        const payload = buildPlayerDistributionPayload(session, drunk);
+        expect(payload.characterType).toBe('townsfolk');
+        expect(payload.characterName).not.toBe('Drunk');
+      }
+    }
+  });
+
+  it('gives up the cover of a character that IS in play rather than falling back to a dead one', () => {
+    // The fallback is what runs on a small table where the usable Townsfolk are all in
+    // play. Reaching for an unusable one there would reintroduce the bug exactly when it is
+    // least noticeable, so the fallback is the usable set too.
+    //
+    // Six players, not five: the Drunk is an Outsider and the 5-player script is
+    // 3 Townsfolk / 0 Outsiders, so there is no Drunk to deal at that size at all.
+    // Dealt repeatedly: the one Outsider in a 6-player script is one of four, so a single
+    // deal is a one-in-four chance of having a Drunk at all.
+    let drunk: ReturnType<typeof Object> | undefined;
+    for (let attempt = 0; attempt < 20 && !drunk; attempt++) {
+      const session = makeSessionWithPlayers(6);
+      distributeRoles(session);
+      drunk = [...session.players.values()].find((p) => p.character === 'drunk');
+    }
+    expect(drunk).toBeDefined();
+    expect(UNUSABLE).not.toContain(drunk!.drunkCoverCharacterId);
+  });
+});

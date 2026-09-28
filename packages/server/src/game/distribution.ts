@@ -9,7 +9,7 @@ import {
   type CharacterDefinition,
   type CharacterType,
   type DistributionCounts,
-  type DistributionPayload,
+  type OwnCharacterPayload,
 } from '@clocktower/shared';
 import type { GameSession, PlayerRecord } from '../session/store.js';
 import { logNightEvent } from '../session/store.js';
@@ -148,8 +148,30 @@ function assignDrunkCover(session: GameSession): void {
   const inPlayIds = new Set(
     [...session.players.values()].map((p) => p.character).filter((c): c is string => c !== null)
   );
-  const unusedTownsfolk = TROUBLE_BREWING_CHARACTERS.filter((c) => c.type === 'townsfolk' && !inPlayIds.has(c.id));
-  const pool = unusedTownsfolk.length > 0 ? unusedTownsfolk : charactersByType('townsfolk');
+  /*
+   * THE COVER MUST BE A CHARACTER WITH AN ABILITY THE DRUNK CAN USE.
+   *
+   * "You do not know you are the Drunk. You think you are a Townsfolk, and you are told
+   * that there is a character whose abilities you think you have."
+   *
+   * The pool was every unused Townsfolk, which includes Soldier, Virgin and Slayer. All three
+   * have abilities that do nothing on their own — the Soldier's is always-on protection, the
+   * Virgin's and the Slayer's fire only when nominated — so a Drunk holding one is shown
+   * their ability text at night, is prompted in a night order, and can never use any of it.
+   * They are told they have a power and hold a rock.
+   *
+   * Excluded on the character's own terms rather than by a list kept in step by hand, so a
+   * future character with the same problem is caught by whoever adds it. Anything with a
+   * `firstNightOrder` or `otherNightOrder` is a character that acts at night and is therefore
+   * usable; anything with neither cannot be.
+   */
+  const usableTownsfolk = (c: (typeof TROUBLE_BREWING_CHARACTERS)[number]) =>
+    c.type === 'townsfolk' && (c.firstNightOrder !== null || c.otherNightOrder !== null);
+  const unusedTownsfolk = TROUBLE_BREWING_CHARACTERS.filter((c) => !inPlayIds.has(c.id) && usableTownsfolk(c));
+  // Falling back to the usable set, not to every Townsfolk: the fallback is what runs when
+  // the table is small enough that the usable ones are all in play, and reaching for an
+  // unusable one there would reintroduce the bug precisely when it is least noticeable.
+  const pool = unusedTownsfolk.length > 0 ? unusedTownsfolk : charactersByType('townsfolk').filter(usableTownsfolk);
   const ordered = shuffle(pool);
 
   drunk.forEach((player, i) => {
@@ -238,26 +260,53 @@ export function resetDistribution(session: GameSession): void {
     player.drunkCoverCharacterId = null;
     player.fortuneTellerRedHerringPlayerId = null;
     player.butlerChoice = null;
+    player.ravenkeeperWakePending = false;
   }
   session.impHeirChoice = null;
   session.virginHasTriggered = false;
   session.slayerHasUsed = false;
 }
 
+/**
+ * The other Minions, as identities.
+ *
+ * "You learn who the other Minions are." — which is a list of NAMES, and is only granted
+ * at 7 or more players. Below that there is no Minion information at all: a Minion in a
+ * 5- or 6-player game is told they are a Minion, and nothing else.
+ *
+ * This used to send every other Evil player's TRUE CHARACTER NAME, at every player count.
+ * That is the whole script handed to every Evil player in one payload, at the exact moment
+ * the game starts, before anyone has said a word. It also told a Minion who the Demon was,
+ * which the rules do not grant, and told a Drunk-as-Minion things that cannot be true.
+ *
+ * Two things are load-bearing and both are easy to undo by accident:
+ *
+ *  - the CHARACTER is gone from the payload entirely, so there is no second copy of this
+ *    rule somewhere else to disagree with; and
+ *  - it is filtered on `characterType === 'minion'`, not `alignment === 'evil'`, because
+ *    a Minion learns about MINIONS. The Demon is deliberately not included — learning who
+ *    the Demon is is a Storyteller decision in BOTC, not an automatic grant.
+ */
 function evilTeammatesOf(session: GameSession, selfId: string) {
+  // "You learn who the other Minions are" is a 7+ grant. Six players is the single most
+  // common table size, so this is the case that mattered.
+  if (session.players.size < 7) return [];
   return [...session.players.values()]
-    .filter((p) => p.playerId !== selfId && p.alignment === 'evil')
+    .filter((p) => p.playerId !== selfId && p.characterType === 'minion')
     .map((p) => ({
       playerId: p.playerId,
       displayName: p.displayName,
-      character: p.character ?? '',
-      characterName: p.character ? getCharacterById(p.character)?.name ?? '' : '',
     }));
 }
 
 /**
  * Builds the per-recipient distribution payload for a single player. Never
  * includes other Good players' data.
+ *
+ * Typed as `OwnCharacterPayload` and not the wider `DistributionPayload` union, which also
+ * contains the Storyteller's Grimoire. It only ever returns the player variant, and the wide
+ * type meant `payload.teammates` did not typecheck at all — so the field carrying the
+ * identities was untouchable from the server and from any test without a cast.
  *
  * THE DRUNK CASE IS A LIVE INFORMATION LEAK, AND IS HANDLED HERE. A Drunk was
  * previously sent `characterName: 'Drunk'` and the Outsider ability text "You do
@@ -268,7 +317,7 @@ function evilTeammatesOf(session: GameSession, selfId: string) {
  * `isDrunkCover` lets the client keep the cover stable without ever knowing the
  * truth.
  */
-export function buildPlayerDistributionPayload(session: GameSession, player: PlayerRecord): DistributionPayload {
+export function buildPlayerDistributionPayload(session: GameSession, player: PlayerRecord): OwnCharacterPayload {
   const trueDef = player.character ? getCharacterById(player.character) : undefined;
   if (!trueDef || !player.characterType || !player.alignment) {
     throw new Error(`Player ${player.playerId} has no character assigned yet`);

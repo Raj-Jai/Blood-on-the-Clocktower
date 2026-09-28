@@ -205,7 +205,7 @@ function handlePostDeath(
   session: GameSession,
   deadPlayerId: string,
   wasDemon: boolean,
-  deathReason: 'executed' | 'night-kill' | 'self-killed'
+  deathReason: 'executed' | 'night-kill' | 'self-killed' | 'slain'
 ): boolean {
   if (wasDemon) {
     const takeover = tryScarletWomanTakeover(session, deadPlayerId);
@@ -217,23 +217,82 @@ function handlePostDeath(
         takeover.newDemonPlayerId,
         takeover.newDemonCharacterId
       );
-      // A legitimate hand-off happened; there IS still a living Demon, so
-      // do not run the "no Demon left" win check this round.
-      const evilWin = checkWinCondition(session, deathReason === 'executed' ? 'executed' : 'self-killed');
-      if (evilWin && evilWin.winner === 'evil') {
-        broadcastGameEnded(io, session, evilWin.winner, evilWin.reason);
+      /*
+       * Tell the heir, and refresh the Grimoire.
+       *
+       * The Imp self-kill path already does both (see StorytellerDemonKill). This path
+       * did not, so a Scarlet Woman who became the Demon by an execution or a night
+       * kill carried on playing as a Minion: her phone still said Scarlet Woman, she
+       * still had no Imp prompt, and the Storyteller's Grimoire still listed her as a
+       * Minion. Only the Storyteller's transient banner knew.
+       *
+       * This was invisible while the takeover mis-fired at every player count below six
+       * (the off-by-one next door). Corrected, it happens in real games.
+       */
+      const heir = session.players.get(takeover.newDemonPlayerId);
+      if (heir) {
+        sendToPlayer(io, heir, ServerEvents.GameDistributed, buildPlayerDistributionPayload(session, heir));
+      }
+      broadcastGrimoire(io, session);
+      // A legitimate hand-off happened; there IS still a living Demon, so the only
+      // win still available is Evil's independent 2-alive condition.
+      const win = checkWinCondition(
+        session,
+        deathReason === 'executed' ? 'executed' : deathReason === 'slain' ? 'slain' : 'self-killed'
+      );
+      if (win && win.winner === 'evil') {
+        broadcastGameEnded(io, session, win.winner, win.reason);
         return true;
       }
       return false;
     }
   }
 
-  const result = checkWinCondition(session, deathReason === 'executed' ? 'executed' : 'self-killed');
+  const result = checkWinCondition(
+    session,
+    deathReason === 'executed' ? 'executed' : deathReason === 'slain' ? 'slain' : 'self-killed'
+  );
   if (result) {
     broadcastGameEnded(io, session, result.winner, result.reason);
     return true;
   }
   return false;
+}
+
+/**
+ * Publishes a death that a day character's ability forced, with no vote to confirm.
+ *
+ * The Virgin and the Slayer both resolve the instant their condition is met, so there is
+ * no Execute button and no Storyteller decision — but the table still has to be TOLD, in
+ * public, and the dead player still has to find out, or they carry on playing as though
+ * they were alive with a live nomination control the server would refuse.
+ *
+ * The two are not the same kind of death and the difference is load-bearing:
+ *
+ *  - The Virgin's text is "they are EXECUTED immediately", so it is a real execution. It
+ *    spends the day's one execution, the Undertaker learns the victim, and a Saint
+ *    nominator loses the game for Good on the spot.
+ *  - The Slayer's kill is a character ability, not a town execution, so it must NOT be
+ *    reported as an execution: it does not spend the day's execution, the Undertaker is
+ *    not told, and the Saint's "if you die by execution" must not fire. A Recluse
+ *    registering as the Demon can be Slain, and that is not a Demon death either.
+ */
+function announceImmediateExecution(io: SocketIOServer, session: GameSession): void {
+  const immediate = session.immediateExecution;
+  if (!immediate) return;
+  const victim = session.players.get(immediate.playerId);
+  if (!victim) return;
+
+  io.to(sessionRoom(session.code)).emit(ServerEvents.ExecutionConfirmed, { playerId: victim.playerId });
+  sendToPlayer(io, victim, ServerEvents.PlayerSelfUpdate, { alive: false });
+  broadcastGrimoire(io, session);
+  broadcastLobby(io, session);
+
+  // The Slayer's kill is its own reason, not a night kill and not a self-kill.
+  const deathReason: 'executed' | 'slain' = immediate.cause === 'virgin' ? 'executed' : 'slain';
+  const ended = handlePostDeath(io, session, victim.playerId, victim.characterType === 'demon', deathReason);
+  if (ended) return;
+  broadcastFlow(io, session);
 }
 
 function requireGameNotEnded(session: GameSession): void {
@@ -359,7 +418,20 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
           session.dayNumber = session.dayNumber === 0 ? 1 : session.dayNumber + 1;
           session.dayRevealed = false;
         } else {
-          // Dusk. Opens the night: increments the night number, expires yesterday's
+          // Dusk. The Mayor's win belongs HERE, before anything is reset: "At dusk,
+          // if exactly three players are alive and no player was executed today,
+          // declare that the game ends and good wins." Checking it at dawn instead —
+          // which is where it used to live, right after `resetForNewDay` had cleared
+          // the record it needed — meant "no execution today" was true by
+          // construction, so the Mayor could win after an execution, and a 3-alive
+          // table could have its game ended before anyone opened their eyes.
+          const mayorWin = checkMayorWin(session);
+          if (mayorWin) {
+            session.phase = phase;
+            broadcastGameEnded(io, session, mayorWin.winner, mayorWin.reason);
+            return;
+          }
+          // Opens the night: increments the night number, expires yesterday's
           // poison, re-arms the Soldier, and prompts every waker privately.
           openNight(session);
         }
@@ -377,15 +449,6 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
           clearAbilityResults(io, session);
         }
 
-        // The Mayor's win is checked as the day starts, when "no execution has
-        // occurred today" is true by definition.
-        if (phase === 'day') {
-          const mayorWin = checkMayorWin(session);
-          if (mayorWin) {
-            broadcastGameEnded(io, session, mayorWin.winner, mayorWin.reason);
-            return;
-          }
-        }
         store.touch(session);
       })
     );
@@ -653,12 +716,35 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const { playerId } = MarkDeadSchema.parse(raw);
         const player = session.players.get(playerId);
         if (!player) throw Errors.playerNotFound();
+        /*
+         * The Saint's own text: "If you die by execution, your team loses."
+         *
+         * This path went straight to `handlePostDeath`, which knows about the Demon's death
+         * and Evil's 2-alive condition but NOT about the Saint — so a Storyteller could hand
+         * -kill the Saint and Evil simply kept playing, while the same death reached by
+         * nomination ended the game. The Storyteller killing the Saint is still an execution
+         * and is still the Saint's trigger, and it outranks every other condition.
+         *
+         * Read BEFORE the death is applied, because that is the only point at which the
+         * player is still a functioning Saint. The Saint is not put in `executedToday` and
+         * does not spend the day's execution: this is the Storyteller correcting the board,
+         * not a vote that resolved, so the Undertaker and the Mayor are unaffected.
+         */
         const wasDemon = player.characterType === 'demon';
+        const wasSaint = checkSaintExecution(session, playerId) !== null;
         player.alive = false;
         broadcastGrimoire(io, session);
         broadcastLobby(io, session);
         broadcastFlow(io, session);
         sendToPlayer(io, player, ServerEvents.PlayerSelfUpdate, { alive: false });
+        if (wasSaint) {
+          const saintWin = checkSaintExecution(session, playerId);
+          if (saintWin) {
+            broadcastGameEnded(io, session, saintWin.winner, saintWin.reason);
+            store.touch(session);
+            return;
+          }
+        }
         const ended = handlePostDeath(io, session, playerId, wasDemon, 'executed');
         if (ended) broadcastGrimoire(io, session);
         store.touch(session);
@@ -706,9 +792,22 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
       guarded(io, socket, () => {
         const { session, player } = requirePlayer(socket);
         requireGameNotEnded(session);
+        // Nominating and voting are DAY actions. The client hides the controls outside
+        // the day, so this only matters for a stale client or a crafted message — but
+        // without it a nomination could be opened at night, where the flow reports
+        // `night-briefing` and no close-the-vote control can ever be rendered, so the
+        // vote silently sat open until dawn discarded it.
+        if (session.phase !== 'day') throw Errors.invalidPhaseTransition();
         const { targetPlayerId } = NominateSchema.parse(raw);
         const nomination = nominate(session, player.playerId, targetPlayerId);
-        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationOpened, toNominationView(nomination));
+        // The Virgin resolves the moment they are nominated, so there may be no
+        // nomination at all — just a death the nominator's own character text caused.
+        if (!nomination) {
+          announceImmediateExecution(io, session);
+          store.touch(session);
+          return;
+        }
+        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationOpened, toNominationView(nomination, session));
         broadcastFlow(io, session);
         // Nominating spends that player's one nomination for the day, and the clients
         // only learn it from the lobby. Without this the NominateBar stayed live for
@@ -723,9 +822,10 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
       guarded(io, socket, () => {
         const { session, player } = requirePlayer(socket);
         requireGameNotEnded(session);
+        if (session.phase !== 'day') throw Errors.invalidPhaseTransition();
         const { nominationId, voting } = VoteSchema.parse(raw);
         const nomination = castVote(session, nominationId, player.playerId, voting);
-        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationVoteUpdate, toNominationView(nomination));
+        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationVoteUpdate, toNominationView(nomination, session));
         // A dead player's single vote is spent here, and the clients track that from
         // the lobby rather than being told.
         broadcastLobby(io, session);
@@ -737,14 +837,21 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
       guarded(io, socket, () => {
         const session = requireStoryteller(socket);
         requireGameNotEnded(session);
+        if (session.phase !== 'day') throw Errors.invalidPhaseTransition();
         const { nominationId } = CloseVoteSchema.parse(raw);
         const nomination = closeVote(session, nominationId);
-        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationClosed, toNominationView(nomination));
+        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationClosed, toNominationView(nomination, session));
+        // The Slayer kills here rather than leaving an execution for the Storyteller to
+        // confirm, because the text says "they die immediately".
+        if (session.immediateExecution) {
+          announceImmediateExecution(io, session);
+        }
         broadcastFlow(io, session);
-        // A day that ends on a failed vote has had "no execution", which is one
-        // of the Mayor's three conditions.
-        const mayorWin = checkMayorWin(session);
-        if (mayorWin) broadcastGameEnded(io, session, mayorWin.winner, mayorWin.reason);
+        // NOT checked here any more. This used to end the game mid-discussion, the
+        // moment a vote failed to reach the threshold, with three players still talking
+        // and nominations still in hand. The Mayor's win is a DUSK condition — the end
+        // of the day — and it is evaluated once, in the phase switch, before anything
+        // is reset.
         store.touch(session);
       })
     );
@@ -784,7 +891,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         // Tell the room the nomination is spent. Without this the Storyteller's
         // "Execute X" button stayed live after they had used it, and players kept
         // being shown a vote for an execution that had already happened.
-        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationVoteUpdate, toNominationView(session.nomination!));
+        io.to(sessionRoom(session.code)).emit(ServerEvents.NominationVoteUpdate, toNominationView(session.nomination!, session));
         store.touch(session);
       })
     );

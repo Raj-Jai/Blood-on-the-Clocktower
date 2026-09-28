@@ -342,10 +342,23 @@ export interface PairInfo {
 export function generatePairInfo(ctx: LieContext, trueCharacterId: string): AbilityChannelInfo {
   const def = getCharacterById(trueCharacterId);
   const type: CharacterType = def?.type ?? 'townsfolk';
-  const inPlayOfType = charactersInPlay(ctx.session).filter((id) => getCharacterById(id)?.type === type);
-  const decoyPool = (inPlayOfType.length > 0 ? inPlayOfType : charactersByType(type).map((c) => c.id)).filter(
-    (id) => id !== trueCharacterId
-  );
+  /*
+   * The decoy is a character that is NOT in play.
+   *
+   * In the real game the second token is a character nobody is playing, precisely so
+   * that showing it gives the player nothing. This pool used to be in-play characters
+   * of the right type, which meant the decoy named a genuine role — so the app was
+   * telling the Washerwoman a true thing about a player the rules say she learns
+   * nothing about. When every character of that type is in play (small tables, or a
+   * 1-of-2 role when the waker is the only one of their type) the pool is empty, and
+   * the second token falls back to repeating the first: the player is then told the
+   * same character twice, which is useless but not a lie.
+   */
+  const inPlay = new Set(charactersInPlay(ctx.session));
+  const notInPlay = charactersByType(type)
+    .map((c) => c.id)
+    .filter((id) => !inPlay.has(id) && id !== trueCharacterId);
+  const decoyPool = notInPlay;
 
   if (!wakerIsUnreliable(ctx.waker)) {
     const decoy = decoyPool.length > 0 ? decoyPool[stableIndex(decoyPool.length, ...salt(ctx, 'pair-decoy'))]! : trueCharacterId;
@@ -384,14 +397,31 @@ export function generatePairInfo(ctx: LieContext, trueCharacterId: string): Abil
   };
 }
 
+/**
+ * The 1-of-2 information, as the player is shown it in the real game.
+ *
+ * The Washerwoman is shown TWO character tokens — one real, one a character that is
+ * not in play — and told that one of the two PLAYERS is one of those characters. They
+ * are not told which one, and they are told nothing whatsoever about the other player.
+ *
+ * This used to append "The other is the <X>." That sentence is not merely extra, it is
+ * FALSE and actively harmful: the decoy was drawn from characters that really were in
+ * play, so it named a genuine role for one of the two named players and made the two
+ * sentences contradict each other. A player who saw it was told something untrue by the
+ * app, in the one piece of information the character exists to give them. Found by
+ * playing — a Washerwoman's screen read "You learn that 1 of 2 players — Ada or Bram —
+ * is the Chef. The other is the Ravenkeeper." Bram IS the Ravenkeeper, so if Bram is not
+ * the Chef then Bram is not the Ravenkeeper either.
+ */
 export function renderPairInfo(info: GeneratedInfo, targetName: string, otherName: string): string {
   const pair = info.value as PairInfo | null;
   const shown = (pair?.shown ?? []).map((id) => getCharacterById(id)?.name ?? id);
   if (shown.length === 0) return `You learn nothing about ${targetName} or ${otherName}.`;
+  // The honest statement: one of these two people is this character, and you are not
+  // told which. Everything else about the other player is deliberately absent.
   const headline = `You learn that 1 of 2 players — ${targetName} or ${otherName} — is the ${shown[0]}.`;
-  const second = shown.length > 1 ? ` The other is the ${shown[1]}.` : '';
   const caveat = pair?.trueIndex === null ? ' (You are not certain which one.)' : '';
-  return `${headline}${second}${caveat}`;
+  return `${headline}${caveat}`;
 }
 
 function charactersInPlay(session: GameSession): string[] {

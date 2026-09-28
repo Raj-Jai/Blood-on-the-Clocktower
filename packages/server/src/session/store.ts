@@ -15,6 +15,16 @@ export interface PlayerRecord {
   usedDeadVote: boolean;
   statusEffects: StatusEffects;
   hasNominatedToday: boolean;
+  /**
+   * Has this player BEEN nominated today?
+   *
+   * Separate from `hasNominatedToday` because the rules make two different promises:
+   * "each player may nominate only once per day, AND each player may be nominated only
+   * once per day". Only the first was ever tracked, so a table could put the same
+   * player up again and again on one day — which is the pressure that rule exists to
+   * stop, and it also made the day's tallies impossible to reason about.
+   */
+  hasBeenNominatedToday: boolean;
   onboardingSeen: boolean;
   /** Position around the seating circle, 0-indexed clockwise. Defaults to join order. */
   seatIndex: number;
@@ -46,6 +56,20 @@ export interface PlayerRecord {
    * would wipe the choice before it could ever be used.
    */
   butlerChoice: { masterPlayerId: string; forDayNumber: number } | null;
+  /**
+   * "If you die at night, you are woken to choose a player." — the one wake, still owed.
+   *
+   * Set when the Imp kills a Ravenkeeper, cleared the moment that wake is spent. It exists
+   * because `isNightFinished` enumerates `buildNightOrder`, so a deferred step that the
+   * order cannot see is a night that can never finish.
+   *
+   * `alive` cannot answer this. A dead Ravenkeeper has three possible states, and the
+   * order must tell them apart: died at night and not yet woken (in), died at night and
+   * already woken (out), executed by the town (out — this ability never fires). Reading
+   * `alive` alone put all three in the order on every remaining night, which handed an
+   * executed Ravenkeeper a free character-peek every night for the rest of the game.
+   */
+  ravenkeeperWakePending: boolean;
 }
 
 export interface ActiveNomination {
@@ -171,10 +195,59 @@ export interface GameSession {
   /** One-shot ability flags, so Virgin/Slayer cannot trigger twice. */
   virginHasTriggered: boolean;
   slayerHasUsed: boolean;
+  /**
+   * The death a day character's ability forced on the last `nominate`/`closeVote`, or
+   * null. The Virgin and the Slayer both say "immediately", so there is no Execute
+   * button to press and no vote to confirm: the death is already done and this is how
+   * the caller learns who died and why. Server-owned, never sent to a client raw.
+   */
+  immediateExecution: { playerId: string; cause: 'virgin' | 'slayer'; nominationId: string | null; byCharacterId: string } | null;
   script: 'trouble-brewing';
   players: Map<string, PlayerRecord>;
   nomination: ActiveNomination | null;
   resolvedNominationsToday: { targetId: string; tally: number }[];
+  /**
+   * Has anybody been executed today?
+   *
+   * A day-scoped fact that used to be DERIVED from `resolvedNominationsToday`, which
+   * does not work: `confirmExecution` deletes the day's record at the moment it executes
+   * — deliberately, so a resolved execution is not counted twice — and that deletion is
+   * exactly what erased the evidence. Three separate rules were broken by the
+   * derivation:
+   *
+   *   - the Mayor's win requires "no execution occurred"; with the record drained the
+   *     clause could never be false, so the Mayor could win after an execution;
+   *   - nothing stopped a SECOND execution in the same day;
+   *   - the Undertaker reads that same record to learn who died by execution, and so
+   *     was always told "nobody died by execution today".
+   *
+   * So it is stored. Set in `confirmExecution`, cleared only in `resetForNewDay`.
+   */
+  executionHappenedToday: boolean;
+  /**
+   * The nomination currently waiting to be executed, if any.
+   *
+   * This used to live on the `ActiveNomination` as `pendingExecution`, which is wrong:
+   * `session.nomination` holds only the MOST RECENT nomination, so a second nomination
+   * replaced it and took the pending execution with it. The execution then silently
+   * disappeared — a real risk, because a second nomination is entirely legal, the rules
+   * compare the day's tallies, and the tie rule explicitly says to "call again for
+   * nominations and tally the next nominee".
+   *
+   * So the pending execution is a day-scoped fact of its own, addressed by nomination id.
+   * Cleared by `resetForNewDay`, and by a later nomination that out-tallies it.
+   */
+  pendingExecution: { nominationId: string; targetId: string } | null;
+  /**
+   * Who was executed today, and the character they were REGISTERED as.
+   *
+   * The Undertaker's own record, kept separately from `resolvedNominationsToday` for
+   * two reasons. That list is the day's vote FLOOR — a nomination that tied out is on it
+   * and was never executed — so it cannot answer "who died by execution". And the
+   * Undertaker learns the character as the table knows them, not their true character:
+   * an executed Spy who registers as the Butler is shown the Butler.
+   */
+  executedToday: { playerId: string; registeredCharacterName: string } | null;
   evilChatHistory: ChatMessage[];
   /** Open Discussion: visible to every player and the Storyteller (unlike Evil chat, which is Evil-only). */
   openChatHistory: ChatMessage[];
@@ -245,10 +318,14 @@ export class SessionStore {
       impHeirChoice: null,
       virginHasTriggered: false,
       slayerHasUsed: false,
+      immediateExecution: null,
       script: 'trouble-brewing',
       players: new Map(),
       nomination: null,
       resolvedNominationsToday: [],
+      executionHappenedToday: false,
+      pendingExecution: null,
+      executedToday: null,
       evilChatHistory: [],
       openChatHistory: [],
       phaseEndsAt: null,
@@ -298,6 +375,8 @@ export class SessionStore {
       usedDeadVote: false,
       statusEffects: { poisoned: false, drunk: false, protected: false },
       hasNominatedToday: false,
+      hasBeenNominatedToday: false,
+      ravenkeeperWakePending: false,
       onboardingSeen: false,
       seatIndex: session.players.size,
       bluffCharacterId: null,

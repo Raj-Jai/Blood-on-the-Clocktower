@@ -1,4 +1,4 @@
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import type { CharacterType, GrimoirePlayerEntry } from '@clocktower/shared';
 import { getCharacterById } from '@clocktower/shared';
 
@@ -51,6 +51,30 @@ function isGroupStart(sorted: GrimoirePlayerEntry[], index: number): boolean {
 
 export function GrimoireTable({ grimoire, onToggleStatus, onMarkDead }: GrimoireTableProps) {
   const sorted = sortGrimoire(grimoire);
+  // "Mark Dead" is a single unconfirmed, irreversible click that removes a player from
+  // the game, and it is one of the very first things a new Storyteller will press by
+  // accident next to a checkbox. Arming it takes one extra tap and removes a whole
+  // class of "how did that player just die" moments.
+  const [armedFor, setArmedFor] = useState<string | null>(null);
+
+  const markDeadButton = (playerId: string, name: string) =>
+    armedFor === playerId ? (
+      <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        <button className="btn btn-danger" onClick={() => {
+          setArmedFor(null);
+          onMarkDead(playerId);
+        }}>
+          Kill {name}?
+        </button>
+        <button className="btn" onClick={() => setArmedFor(null)}>
+          Cancel
+        </button>
+      </span>
+    ) : (
+      <button className="btn" onClick={() => setArmedFor(playerId)}>
+        Mark Dead
+      </button>
+    );
 
   return (
     <>
@@ -105,11 +129,7 @@ export function GrimoireTable({ grimoire, onToggleStatus, onMarkDead }: Grimoire
                   </td>
                   <td style={{ padding: 8 }}>{entry.alive ? 'Alive' : 'Dead'}</td>
                   <td style={{ padding: 8 }}>
-                    {entry.alive && (
-                      <button className="btn" onClick={() => onMarkDead(entry.playerId)}>
-                        Mark Dead
-                      </button>
-                    )}
+                    {entry.alive && markDeadButton(entry.playerId, entry.displayName)}
                   </td>
                 </tr>
               </Fragment>
@@ -145,11 +165,7 @@ export function GrimoireTable({ grimoire, onToggleStatus, onMarkDead }: Grimoire
                   Neighbors: {nameOf(grimoire, entry.livingLeftNeighborId)} / {nameOf(grimoire, entry.livingRightNeighborId)}
                 </p>
                 <StatusToggles entry={entry} onToggleStatus={onToggleStatus} />
-                {entry.alive && (
-                  <button className="btn" style={{ marginTop: 8 }} onClick={() => onMarkDead(entry.playerId)}>
-                    Mark Dead
-                  </button>
-                )}
+                {entry.alive && <div style={{ marginTop: 8 }}>{markDeadButton(entry.playerId, entry.displayName)}</div>}
               </div>
             </div>
           );

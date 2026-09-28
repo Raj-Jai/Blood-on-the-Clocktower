@@ -36,11 +36,14 @@ function flow(over: Partial<FlowState> = {}): FlowState {
 function ctx(over: Partial<PlayerFlowContext> = {}): PlayerFlowContext {
   return {
     playerId: ADA,
+    displayName: 'Ada',
     alive: true,
     hasOpenNightPrompt: false,
     hasSubmittedNightChoice: false,
     stepIsUnmakeable: false,
     isEvil: false,
+    hasNightResult: false,
+    hasVoteToken: true,
     ...over,
   };
 }
@@ -68,6 +71,72 @@ describe('derivePlayerMoment', () => {
       );
       expect(m.kind).toBe('asleep');
       expect(m.title).toMatch(/close your eyes/i);
+    });
+  });
+
+  /*
+   * The night result, which is the information the whole game runs on and which used
+   * to be computed, stored, and then never rendered by anything.
+   *
+   * The failure mode was not a wrong string — it was an unreachable branch. The result
+   * arrives at resolve, at which point the player no longer owes a choice, and
+   * `showNightPrompt` was true only while they DID owe one. So the only component able
+   * to render a result was unmounted at exactly the moment one arrived. These tests
+   * drive the derivation the bug actually lived in, because a test that renders the
+   * panel in isolation cannot see the gate.
+   */
+  describe('what you learned', () => {
+    it('puts the result on screen the moment the night resolves', () => {
+      const m = derivePlayerMoment(flow({ stage: 'night-resolving' }), ctx({ hasNightResult: true }));
+      expect(m.kind).toBe('night-result');
+      // The panel is only rendered when this is true, so this assertion IS the fix.
+      expect(m.showNightPrompt).toBe(true);
+    });
+
+    it('shows it to a character that was never given a picker at all', () => {
+      // The Chef and the Empath are woken and told; they never get a prompt, so
+      // `hasOpenNightPrompt` is false and they used to be structurally unable to see
+      // anything. This is the case that could not possibly work before.
+      const m = derivePlayerMoment(
+        flow({ stage: 'night-resolving' }),
+        ctx({ hasNightResult: true, hasOpenNightPrompt: false, hasSubmittedNightChoice: false })
+      );
+      expect(m.kind).toBe('night-result');
+      expect(m.showNightPrompt).toBe(true);
+    });
+
+    it('still asks for the choice first when the player both owes one and has a result', () => {
+      // Priority: an outstanding choice outranks information. Getting this backwards
+      // would hide a live picker behind a results panel.
+      const m = derivePlayerMoment(
+        flow({ stage: 'night-step', activePlayerId: ADA, needsChoiceFromPlayerId: ADA, needsChoiceFromName: 'Ada' }),
+        ctx({ hasNightResult: true, hasOpenNightPrompt: true })
+      );
+      expect(m.kind).toBe('awake-choose');
+      expect(m.action).toBe('submit-night-choice');
+    });
+
+    it('keeps the result up through dawn, while the table reads the Grimoire', () => {
+      const m = derivePlayerMoment(flow({ stage: 'day-reveal' }), ctx({ hasNightResult: true }));
+      expect(m.kind).toBe('night-result');
+      expect(m.showNightPrompt).toBe(true);
+    });
+
+    it('yields to the day once discussion starts, rather than crowding it', () => {
+      // "What do I do now" outranks "what did I learn" once the table is talking. The
+      // result is not lost — it moves to the More sheet.
+      const m = derivePlayerMoment(flow({ stage: 'day-discussion' }), ctx({ hasNightResult: true }));
+      expect(m.kind).not.toBe('night-result');
+      expect(m.showNightPrompt).toBe(false);
+    });
+
+    it('tells a DEAD player nothing overnight', () => {
+      // A ghost is never woken and learns nothing. A stale result must not surface.
+      const m = derivePlayerMoment(
+        flow({ stage: 'night-resolving' }),
+        ctx({ alive: false, hasNightResult: true })
+      );
+      expect(m.kind).not.toBe('night-result');
     });
   });
 
@@ -187,13 +256,34 @@ describe('derivePlayerMoment', () => {
       expect(m.action).toBe('vote');
     });
 
-    it('reminds a dead player that they have one vote left', () => {
-      // The rule that surprises new players most, so it is said outright.
+    it('reminds a dead player that they have one vote for the whole game', () => {
+      // The rule that surprises new players most, so it is said outright — including
+      // that it is ONE vote for the rest of the game, not one a day.
       const m = derivePlayerMoment(flow({ stage: 'day-voting', phase: 'day' }), ctx({ alive: false }));
       expect(m.kind).toBe('dead');
       expect(m.mayStillVote).toBe(true);
       expect(m.action).toBe('vote');
-      expect(m.title).toMatch(/one vote left/i);
+      expect(m.title).toMatch(/one vote for the whole game/i);
+    });
+
+    it('stops offering a vote to a dead player who has spent theirs', () => {
+      /*
+       * "Each dead player may vote for only one player throughout the rest of the game."
+       *
+       * The app used to say "you have one vote left" to a ghost on every nomination, for
+       * the rest of the game, and hand over a live button that could only ever come back
+       * as an error — because nothing reached the client to tell it the vote was spent.
+       * Being told a falsehood about the single most surprising rule in the game is how a
+       * player learns to distrust everything else the app tells them.
+       */
+      const m = derivePlayerMoment(
+        flow({ stage: 'day-voting', phase: 'day' }),
+        ctx({ alive: false, hasVoteToken: false })
+      );
+      expect(m.kind).toBe('dead');
+      expect(m.mayStillVote).toBe(false);
+      expect(m.action).not.toBe('vote');
+      expect(m.title).toMatch(/vote is spent/i);
     });
 
     it('does not offer a dead player a nomination during discussion', () => {

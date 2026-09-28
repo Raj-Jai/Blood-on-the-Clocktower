@@ -103,6 +103,19 @@ describe('full game flow integration', () => {
     const nominatorSocket = playerSockets[0]!;
     const targetId = players[1]!;
 
+    /*
+     * Move to the day first. Nominating and voting are DAY actions, and the server now
+     * enforces that: `PlayerNominate` and `PlayerVote` both refuse outside the day
+     * phase. This test used to nominate straight after distribution, when the session
+     * was still in the night — which it did only because nothing checked. A vote could
+     * be opened at night, where the flow reports `night-briefing` and no
+     * close-the-vote control can ever be rendered, so it sat open until dawn discarded
+     * it. The client hid the control, so only a test like this could reach the gap.
+     */
+    stSocket.emit(ClientEvents.StorytellerSetPhase, { phase: 'day' });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(store.getSession(code)!.phase).toBe('day');
+
     const openedPromise = waitFor<any>(stSocket, ServerEvents.NominationOpened);
     nominatorSocket.emit(ClientEvents.PlayerNominate, { targetPlayerId: targetId });
     const opened = await openedPromise;

@@ -56,7 +56,20 @@ function makeSession(count: number): { session: GameSession; players: PlayerReco
 // ---------------------------------------------------------------------------
 
 describe('buildNightOrder', () => {
-  it('returns the official First Night order, with the Demon woken last', () => {
+  it('returns the official First Night order, with the Poisoner FIRST and the Demon last', () => {
+    /*
+     * The official Trouble Brewing first night, from the printed night sheet and the
+     * official Script Tool:
+     *   minion info, demon info, POISONER, Washerwoman, Librarian, Investigator,
+     *   Chef, Empath, Fortune Teller, Butler, Spy — then the Imp kills.
+     *
+     * This test previously asserted `['washerwoman', 'chef', 'empath', 'fortune-teller',
+     * 'poisoner', 'spy', 'imp']` and was NAMED "returns the official First Night order".
+     * That put the Poisoner 5th of 7, after every information role had already been
+     * told the truth, so poisoning anybody that night did nothing at all. A test whose
+     * name asserts a rule it does not check is worse than no test: it makes the bug
+     * look like a decision. Found by reading this app's own Night Order panel mid-game.
+     */
     const { session, players } = makeSession(7);
     setCharacter(players[0]!, 'washerwoman');
     setCharacter(players[1]!, 'empath');
@@ -69,15 +82,56 @@ describe('buildNightOrder', () => {
     const order = buildNightOrder(session);
 
     expect(order.map((s) => s.characterId)).toEqual([
+      'poisoner',
       'washerwoman',
       'chef',
       'empath',
       'fortune-teller',
-      'poisoner',
       'spy',
       'imp',
     ]);
     expect(order.every((s) => s.isFirstNight)).toBe(true);
+  });
+
+  it('wakes the Butler on the first night', () => {
+    // The Butler has a First Night slot on the official sheet. `firstNightOrder: null`
+    // removed it, so the Butler was never woken on night one at all — and the Butler's
+    // own ability text promises a choice that the table was never asked for.
+    expect(getCharacterById('butler')!.firstNightOrder).toBe(8);
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'butler');
+    setCharacter(players[1]!, 'imp');
+    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[3]!, 'chef');
+    setCharacter(players[4]!, 'washerwoman');
+    session.nightNumber = 1;
+    expect(buildNightOrder(session).map((s) => s.characterId)).toContain('butler');
+  });
+
+  it('wakes a player before every information role on every night', () => {
+    // The single consequence that matters: the Poisoner must be able to poison BEFORE
+    // anybody is told anything, or the poison is a no-op for that night. Only characters
+    // that actually wake on the night in question are checked — the Undertaker never
+    // wakes on night one, and the Chef never wakes after it.
+    for (const night of [1, 2]) {
+      const { session, players } = makeSession(9);
+      setCharacter(players[0]!, 'poisoner');
+      setCharacter(players[1]!, 'monk');
+      setCharacter(players[2]!, 'imp');
+      setCharacter(players[3]!, 'empath');
+      setCharacter(players[4]!, 'fortune-teller');
+      setCharacter(players[5]!, 'undertaker');
+      setCharacter(players[6]!, 'butler');
+      setCharacter(players[7]!, 'chef');
+      setCharacter(players[8]!, 'washerwoman');
+      session.nightNumber = night;
+      const ids = buildNightOrder(session).map((s) => s.characterId);
+      expect(ids[0], `night ${night}: the Poisoner must be woken first`).toBe('poisoner');
+      for (const role of ['empath', 'fortune-teller', 'butler', 'chef', 'washerwoman', 'undertaker']) {
+        if (!ids.includes(role)) continue;
+        expect(ids.indexOf(role), `night ${night}: ${role} comes after the Poisoner`).toBeGreaterThan(0);
+      }
+    }
   });
 
   it('REGRESSION: the Imp appears in the first night order at all', () => {
@@ -98,6 +152,10 @@ describe('buildNightOrder', () => {
   });
 
   it('returns the official other-night order and skips first-night-only characters', () => {
+    // Official: Poisoner, Monk, Scarlet Woman, Imp, Ravenkeeper, Empath,
+    // Fortune Teller, Butler, Undertaker, Spy. The Scarlet Woman has no choice to
+    // make so the app gives it no wake. This previously asserted the information roles
+    // FIRST and the Poisoner 5th, which is the reverse of the sheet.
     const { session, players } = makeSession(7);
     setCharacter(players[0]!, 'washerwoman');
     setCharacter(players[1]!, 'empath');
@@ -109,12 +167,12 @@ describe('buildNightOrder', () => {
     session.nightNumber = 2;
 
     expect(buildNightOrder(session).map((s) => s.characterId)).toEqual([
+      'poisoner',
+      'monk',
+      'imp',
       'empath',
       'fortune-teller',
-      'monk',
       'butler',
-      'poisoner',
-      'imp',
     ]);
   });
 
@@ -148,15 +206,43 @@ describe('buildNightOrder', () => {
     expect(monkAfter.legalTargetIds).toEqual([players[3]!.playerId, players[5]!.playerId]);
   });
 
-  it('skips dead players but wakes a Ravenkeeper who is already dead', () => {
-    const { session, players } = makeSession(5);
-    setCharacter(players[0]!, 'ravenkeeper');
-    setCharacter(players[1]!, 'imp');
-    players[0]!.alive = false;
-    session.nightNumber = 2;
+  it('lists a dead Ravenkeeper in the order only while their one wake is owed', () => {
+    /*
+     * "If you die at night, you are woken to choose a player."
+     *
+     * The order used to add every dead Ravenkeeper on every night with no condition, so a
+     * Ravenkeeper executed by the town — where this ability never fires — got a free look
+     * at a character every night for the rest of the game, and one who had already been
+     * woken was woken again.
+     *
+     * The step has to be visible in the order, not only in `appendRavenkeeperWake`,
+     * because `isNightFinished` and the Storyteller's outstanding list both enumerate it.
+     * So these three cases are the whole rule, and all three are asserted from
+     * `buildNightOrder` rather than from the kill path that arms the flag.
+     */
+    const mk = () => {
+      const { session, players } = makeSession(5);
+      setCharacter(players[0]!, 'ravenkeeper');
+      setCharacter(players[1]!, 'imp');
+      players[0]!.alive = false;
+      session.nightNumber = 3;
+      return { session, players };
+    };
 
-    const order = buildNightOrder(session);
-    expect(order.map((s) => s.characterId)).toEqual(['ravenkeeper', 'imp']);
+    // Executed, or dead for any reason that is not the Imp's blade: no wake, ever.
+    const executed = mk();
+    expect(executed.players[0]!.ravenkeeperWakePending).toBe(false);
+    expect(buildNightOrder(executed.session).map((s) => s.characterId)).not.toContain('ravenkeeper');
+
+    // Died at night, not yet woken: owed, so the night cannot finish over the pick.
+    const owed = mk();
+    owed.players[0]!.ravenkeeperWakePending = true;
+    expect(buildNightOrder(owed.session).map((s) => s.characterId)).toContain('ravenkeeper');
+
+    // Already spent: the step must not reappear, or every later night is unfinishable.
+    const spent = mk();
+    spent.players[0]!.ravenkeeperWakePending = false;
+    expect(buildNightOrder(spent.session).map((s) => s.characterId)).not.toContain('ravenkeeper');
   });
 
   it('never puts a LIVING Ravenkeeper in the night order, on any night', () => {
@@ -543,9 +629,17 @@ describe('the wake walk cannot be outrun by the stepper', () => {
 
   it('announces every auto-resolving waker, one at a time, in official order', () => {
     const { session } = night();
-    // First night order: Chef 4, Empath 5, Poisoner 8, Imp 10 — but seat order is
-    // Empath(0), Chef(1), Poisoner(2), Imp(3), so the walk runs Empath, Chef,
-    // Poisoner, Imp.
+    /*
+     * Seated Empath(0), Chef(1), Poisoner(2), Imp(3) — deliberately NOT in wake order.
+     * In the official first-night order the walk is Poisoner 1, Washerwoman 2,
+     * Librarian 3, Investigator 4, Chef 5, Empath 6, … Imp 10, so the announced
+     * sequence must be Player2, Player1, Player0, Player3: the Poisoner first because
+     * it is woken first, and the Chef before the Empath because 5 precedes 6.
+     *
+     * This used to assert the seat order by accident, and asserted an order that had the
+     * information roles ahead of the Minion. That is the assertion which let the
+     * inverted night order look correct.
+     */
     const announced: string[] = [];
     for (let i = 0; i < 6; i++) {
       const flow = buildFlowState(session);
@@ -553,9 +647,9 @@ describe('the wake walk cannot be outrun by the stepper', () => {
       announced.push(flow.activePlayerName);
       finishWake(session, flow.activePlayerId!);
     }
-    // The Empath and the Chef both appear, which is what the sweep used to eat, and
-    // they appear in OFFICIAL order (Chef 4 before Empath 5) rather than seat order.
-    expect(announced).toEqual(['Player1', 'Player0', 'Player2', 'Player3']);
+    // The Empath and the Chef both appear, which is what a sweep used to eat, and they
+    // appear in OFFICIAL order (Chef 5 before Empath 6) rather than seat order.
+    expect(announced).toEqual(['Player2', 'Player1', 'Player0', 'Player3']);
   });
 
   it('never opens two pauses at once, so two people are never told to close their eyes together', () => {
@@ -573,13 +667,27 @@ describe('the wake walk cannot be outrun by the stepper', () => {
   it('will not deal with a player who still owes a choice', () => {
     // Clicking past somebody who has not submitted silently skipped their whole
     // night step, which is the same class of bug as skipping an auto waker.
+    //
+    // With the official first-night order the pickers come FIRST (Poisoner 1, Imp 10)
+    // and the two characters with nothing to pick sit between them (Chef 5, Empath 6),
+    // so the walk passes both auto wakers and lands on the Imp.
+    //
+    // What protects the step is NOT `finishWake` — that will move the cursor if the
+    // caller insists. It is that the flow reports the Imp as still owing a choice, and
+    // the Storyteller's script hides the "I've dealt with them" control while it does,
+    // so there is nothing on screen to click. That is asserted here, because a test
+    // that called `finishWake` directly would have passed while the button was there.
     const { session, players } = night();
-    walkPast(session, 2); // Empath, Chef
-    const owed = buildFlowState(session).activePlayerId;
-    expect(owed).toBe(players[2]!.playerId);
-    const step = session.currentNight!.steps.find((s) => s.wakerPlayerId === owed);
+    submitNightChoice(session, players[2]!.playerId, [players[0]!.playerId]); // Poisoner
+    walkPast(session, 2); // Chef, Empath — neither can submit
+    const flow = buildFlowState(session);
+    expect(flow.activePlayerId).toBe(players[3]!.playerId); // the Imp
+    expect(flow.needsChoiceFromPlayerId).toBe(players[3]!.playerId);
+    const step = session.currentNight!.steps.find((s) => s.wakerPlayerId === players[3]!.playerId);
+    // No target chosen yet, so the picker is empty and submitting is refused.
     expect(step?.targetIds).toEqual([]);
-    expect(buildFlowState(session).activePlayerId).toBe(players[2]!.playerId);
+    expect(() => submitNightChoice(session, players[3]!.playerId, [])).toThrow();
+    expect(buildFlowState(session).activePlayerId).toBe(players[3]!.playerId);
   });
 });
 
@@ -615,15 +723,25 @@ describe('a step with no legal target', () => {
 
   it('does not deadlock the night: it is ready to resolve once the others have', () => {
     const { session, players } = noOutsiderSession();
-    // Night one order: Librarian 2 (unmakeable), Chef 4, Empath 5, Poisoner 8,
-    // Imp 10. The wake walk is one person at a time, so the three who have
-    // nothing to choose are dealt with before either picker.
+    /*
+     * Official first night, so the walk is: Poisoner 1 (p2), Librarian 3 (p0,
+     * UNMAKEABLE — there is no Outsider to look at), Chef 5 (p3, nothing to pick),
+     * Empath 6 (p4, nothing to pick), Imp 10 (p1).
+     *
+     * The unmakeable step is the point of this test: it can never be satisfied, so it
+     * must not block the night. It used to be the FIRST waker, because the old order
+     * put the Librarian at 2 and the Poisoner at 8.
+     */
     expect(buildFlowState(session).readyToResolve).toBe(false);
-    walkPast(session, 3);
+    // The Poisoner is awake first and owes a choice.
+    expect(buildFlowState(session).activePlayerId).toBe(players[2]!.playerId);
     submitNightChoice(session, players[2]!.playerId, [players[3]!.playerId]);
-    finishWake(session, players[2]!.playerId);
+    // The unmakeable Librarian, then the Chef, then the Empath — none of whom can
+    // submit anything.
+    walkPast(session, 3);
+    expect(buildFlowState(session).activePlayerId).toBe(players[1]!.playerId);
+    expect(buildFlowState(session).readyToResolve).toBe(false);
     submitNightChoice(session, players[1]!.playerId, [players[3]!.playerId]);
-    finishWake(session, players[1]!.playerId);
     expect(buildFlowState(session).readyToResolve).toBe(true);
   });
 
@@ -900,14 +1018,18 @@ describe('the Drunk', () => {
     setCharacter(players[2]!, 'poisoner');
     setCharacter(players[3]!, 'washerwoman');
     setCharacter(players[4]!, 'recluse');
-    players[0]!.drunkCoverCharacterId = 'chef'; // First Night order 4
+    players[0]!.drunkCoverCharacterId = 'chef'; // First Night order 5
     players[0]!.statusEffects.drunk = true;
     session.nightNumber = 1;
 
     const order = buildNightOrder(session);
     const drunkStep = order.find((s) => s.wakerPlayerId === players[0]!.playerId)!;
     expect(drunkStep.characterId).toBe('chef');
-    expect(drunkStep.order).toBe(4);
+    // The Drunk wakes in the slot of the character they believe they are, so this
+    // number IS the Chef's slot. It was 4 before the night order was corrected to the
+    // official sheet, where the Chef sits fifth, after the Washerwoman, Librarian and
+    // Investigator.
+    expect(drunkStep.order).toBe(5);
     expect(toNightOrderUpdate(session).steps.find((s) => s.wakerPlayerId === players[0]!.playerId)!.isDrunkCover).toBe(
       true
     );
@@ -949,8 +1071,12 @@ describe('win conditions added by the Night Engine', () => {
     players[5]!.alive = false;
     expect(checkMayorWin(session)).toEqual({ winner: 'good', reason: 'mayor-three-left' });
 
-    // A qualifying nomination today means an execution has already happened.
-    session.resolvedNominationsToday = [{ targetId: players[3]!.playerId, tally: 3 }];
+    // An execution today blocks the Mayor's win. This used to be simulated by putting a
+    // record in `resolvedNominationsToday`, which is no longer what that list means: it
+    // is the day's vote FLOOR, and `confirmExecution` never removed from it. The
+    // "did an execution happen today" fact is `executionHappenedToday`, stored, because
+    // deriving it from the vote list is exactly what made the clause unenforceable.
+    session.executionHappenedToday = true;
     expect(checkMayorWin(session)).toBeNull();
   });
 });
@@ -1061,19 +1187,22 @@ describe('lie policy', () => {
     // The first implementation assembled the sentence from a noun and a number and
     // shipped "You learn that there is pair of adjacent evil players." English will
     // not let you do it generically, so each cardinality has its own template.
+    // Supplied templates, so this test is about the grammar and not about these particular
+    // sentences. They used to be a stale copy of the Empath's real strings, which is exactly
+    // how the app drifted to British spelling while the official card says "neighbors".
     const templates = {
-      zero: 'You learn that none of your living neighbours is evil.',
-      one: 'You learn that one of your living neighbours is evil.',
-      many: (n: number) => `You learn that ${n} of your living neighbours are evil.`,
+      zero: 'You learn that none of your living neighbors is evil.',
+      one: 'You learn that one of your living neighbors is evil.',
+      many: (n: number) => `You learn that ${n} of your living neighbors are evil.`,
     };
     expect(renderCountInfo({ value: 0, truth: 'TRUE', rationale: '' }, templates)).toBe(
-      'You learn that none of your living neighbours is evil.'
+      'You learn that none of your living neighbors is evil.'
     );
     expect(renderCountInfo({ value: 1, truth: 'TRUE', rationale: '' }, templates)).toBe(
-      'You learn that one of your living neighbours is evil.'
+      'You learn that one of your living neighbors is evil.'
     );
     expect(renderCountInfo({ value: 2, truth: 'TRUE', rationale: '' }, templates)).toBe(
-      'You learn that 2 of your living neighbours are evil.'
+      'You learn that 2 of your living neighbors are evil.'
     );
   });
 
@@ -1111,7 +1240,7 @@ describe('lie policy', () => {
     const { session, players } = drunkSession();
     session.nightNumber = 3;
     const delivery = deliverNightInfo({
-      rulesText: 'Empath: Each night, you learn how many of your 2 alive neighbours are evil.',
+      rulesText: 'Empath: Each night, you learn how many of your 2 alive neighbors are evil.',
       ability: generateCountInfo(lieContext(session, players[0]!, 'empath'), 1, 2),
     });
     expect(delivery.rulesChannel.truth).toBe('TRUE');
@@ -1360,26 +1489,30 @@ describe('night engine over a real socket', () => {
     // Register the listener BEFORE the emit that triggers it, or the prompt
     // arrives first and the test hangs on a promise nobody will resolve.
     const poisonerSocket = playerSockets[tokens.findIndex((t) => t.playerId === players[2]!.playerId)]!;
+    /*
+     * Official first-night order with this roster: Poisoner 1, Chef 5, Spy 9, Imp 10.
+     * The Poisoner is therefore the FIRST waker, which is the whole point of the
+     * corrected order — the Minions go first so the Storyteller can decide what may
+     * safely be told before anyone acts on their ability. It used to be Chef 4, then
+     * Poisoner 8, with the information roles ahead of the Minion.
+     *
+     * The listener is attached BEFORE the emit that starts the walk, or the prompt
+     * arrives during the settle delay and the promise never resolves.
+     */
+    const poisonerPromptPromise = waitForUpTo<any>(poisonerSocket, ServerEvents.NightPrompt, 4000);
     stSocket.emit(ClientEvents.StorytellerFlowAdvance);
-    await new Promise((r) => setTimeout(r, 150));
-    // The Chef (order 4) wakes before the Poisoner (order 8) and has nothing to
-    // choose, so the Storyteller deals with them. The walk is one person at a time,
-    // so nothing is prompted in between.
-    stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' });
-    const poisonerPromptPromise = waitForUpTo<any>(poisonerSocket, ServerEvents.NightPrompt, 3000);
-
-    // The Poisoner wakes before the Imp on the first night, so this is a real
-    // serial wake-up: one person is prompted, they submit, and that releases the
-    // next. Nobody is ever holding two roles at once.
     const poisonerPrompt = await poisonerPromptPromise;
     expect(poisonerPrompt?.characterName).toBe('Poisoner');
+    await new Promise((r) => setTimeout(r, 150));
 
-    // The Spy (order 9) wakes between the Poisoner and the Imp and has nothing to
-    // choose, so the Storyteller deals with them. The walk is one person at a
-    // time: nobody is prompted until the previous waker has been dealt with.
+    // The Poisoner submits, which releases the walk. Then the Chef (order 5) and the
+    // Spy (order 9) — both of whom have nothing to choose — are dealt with one at a
+    // time. Nobody is prompted in between.
     poisonerSocket.emit(ClientEvents.PlayerSubmitNightChoice, { targetIds: [players[4]!.playerId] });
     await new Promise((r) => setTimeout(r, 200));
-    stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' });
+    stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' }); // Chef
+    await new Promise((r) => setTimeout(r, 150));
+    stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' }); // Spy
     const promptPromise = waitForUpTo<any>(demonSocket, ServerEvents.NightPrompt, 4000);
     const prompt = await promptPromise;
 
@@ -1477,6 +1610,126 @@ describe('night engine over a real socket', () => {
 
     teardown(stSocket, playerSockets);
   }, 20000);
+
+  it('gives a POISONED Spy no Grimoire, and tells them so', async () => {
+    /*
+     * The Spy's case never consulted `abilityWorks`, unlike every other ability. A
+     * poisoned Spy was handed the whole Grimoire every single night — the largest
+     * information leak in the game, and reachable on night 1, because poisoning the Spy
+     * is the Poisoner's obvious first move at that seat.
+     */
+    const { session, stSocket, playerSockets, tokens } = await setUpGame();
+    const players = [...session.players.values()].sort((a, b) => a.seatIndex - b.seatIndex);
+    setCharacter(players[0]!, 'imp');
+    setCharacter(players[1]!, 'spy');
+    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[3]!, 'chef');
+    setCharacter(players[4]!, 'recluse');
+    session.phase = 'day';
+    session.dayNumber = 1;
+    session.nightNumber = 0;
+    const spySocket = playerSockets[tokens.findIndex((t) => t.playerId === players[1]!.playerId)]!;
+
+    const orderPromise = waitFor<any>(stSocket, ServerEvents.NightOrderUpdate);
+    stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'next' });
+    await orderPromise;
+
+    // Poison the Spy during the night, which is when the Poisoner acts — setting it
+    // beforehand would be wiped by the poison boundary at `openNight`, and the test would
+    // pass for the wrong reason.
+    players[1]!.statusEffects.poisoned = true;
+
+    let gotGrimoire = false;
+    spySocket.on(ServerEvents.GrimoireUpdate, () => {
+      gotGrimoire = true;
+    });
+    stSocket.emit(ClientEvents.StorytellerAdvanceNight, { action: 'resolve' });
+    await new Promise((r) => setTimeout(r, 120));
+
+    expect(gotGrimoire).toBe(false);
+    expect(
+      session.log.some((e) => e.kind === 'ability-failed' && /Spy .* saw no Grimoire/.test(e.detail))
+    ).toBe(true);
+
+    teardown(stSocket, playerSockets);
+  }, 20000);
+
+  it('kills a POISONED Soldier, because their ability is not working', () => {
+    /*
+     * The almanac's own worked example: "The Poisoner poisons the Soldier, then the Imp
+     * attacks the Soldier. The Soldier dies, because they have no ability while poisoned."
+     *
+     * The kill checked the protection flag alone, so a poisoned Soldier survived — the one
+     * interaction the character exists for. The Monk is deliberately NOT affected: theirs
+     * is an action they took, and a poisoned Monk's action never happened in the first
+     * place, so there is no protection to cancel.
+     */
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'imp');
+    setCharacter(players[1]!, 'soldier');
+    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[3]!, 'monk');
+    setCharacter(players[4]!, 'washerwoman');
+    session.phase = 'night';
+    session.nightNumber = 2;
+    openNight(session);
+
+    const soldier = players[1]!;
+    const monk = players[3]!;
+
+    // Both are protected this night.
+    expect(soldier.statusEffects.protected).toBe(true);
+
+    // Poison the Soldier. Protection is from the DEMON'S ability, which is not working.
+    soldier.statusEffects.poisoned = true;
+    const result = resolveDemonKill(session, players[0]!.playerId, soldier.playerId);
+    expect(result.killed).toBe(true);
+    expect(soldier.alive).toBe(false);
+
+    // A drunk Soldier is the same: no functioning ability, no protection.
+    soldier.alive = true;
+    soldier.statusEffects.poisoned = false;
+    soldier.statusEffects.drunk = true;
+    expect(resolveDemonKill(session, players[0]!.playerId, soldier.playerId).killed).toBe(true);
+    expect(soldier.alive).toBe(false);
+
+    // The Monk is deliberately NOT affected, and this is the asymmetry the fix has to
+    // get right. The Soldier's safety is an ability permanently in force, so it stops
+    // working when the character is. The Monk's is an ACTION already taken, so there is
+    // nothing for poison to undo — a poisoned Monk simply never protected anyone in the
+    // first place, which is tested where the Monk's own choice is resolved.
+    //
+    // Modelled directly as the post-action state: the flag is what the Monk's resolved
+    // choice sets, and re-running the whole night here would resolve the Imp too.
+    soldier.alive = true;
+    soldier.statusEffects.drunk = false;
+    soldier.statusEffects.poisoned = true;
+    monk.statusEffects.protected = true;
+    expect(resolveDemonKill(session, players[0]!.playerId, monk.playerId).killed).toBe(false);
+    expect(monk.alive).toBe(true);
+  });
+
+  it('gives a poisoned Monk no protection, because their action never happened', () => {
+    // The other half of the asymmetry above, driven through the real resolution path.
+    // If this were allowed to protect, then cancelling protection on poison would be
+    // meaningless for the Monk and the Soldier fix would be half a rule.
+    const { session, players } = makeSession(5);
+    setCharacter(players[0]!, 'imp');
+    setCharacter(players[1]!, 'washerwoman');
+    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[3]!, 'monk');
+    setCharacter(players[4]!, 'recluse');
+    session.phase = 'night';
+    session.nightNumber = 2;
+    openNight(session);
+
+    const monk = players[3]!;
+    submitNightChoice(session, monk.playerId, [players[1]!.playerId]);
+    monk.statusEffects.poisoned = true;
+    resolveNight(session, null as never);
+
+    expect(players[1]!.statusEffects.protected).toBe(false);
+  });
 
   it('runs a whole night with no spoken instruction: distribute, wake, submit, resolve, dawn', async () => {
     // The end-to-end claim of this issue: after distribution the Storyteller's only
@@ -1654,4 +1907,64 @@ describe('night engine over a real socket', () => {
 
     teardown(stSocket, playerSockets);
   }, 30000);
+});
+
+describe('the Butler may choose any player who is not a Minion or the Demon', () => {
+  /*
+   * The data said `townsfolk`, so the Butler could not choose a Saint, a Recluse, a Drunk
+   * or a Ravenkeeper — which in Trouble Brewing is every Outsider, the largest single
+   * group of characters in the script. The official rule is only that the choice may not
+   * be a Minion or the Demon.
+   *
+   * Written against the step's own `legalTargetIds` — the same projection the player is
+   * shown — rather than the character data, because the data is what was wrong and a test
+   * asserting the data would just re-state the bug.
+   */
+  it('includes Outsiders and excludes Evil', () => {
+    const { session, players } = makeSession(7);
+    const butler = players[0]!;
+    setCharacter(butler, 'butler');
+    setCharacter(players[1]!, 'washerwoman');
+    setCharacter(players[2]!, 'saint');
+    setCharacter(players[3]!, 'recluse');
+    setCharacter(players[4]!, 'poisoner');
+    setCharacter(players[5]!, 'imp');
+    setCharacter(players[6]!, 'chef');
+    session.phase = 'night';
+    session.nightNumber = 2;
+    openNight(session);
+
+    const step = buildNightOrder(session).find((s) => s.characterId === 'butler');
+    expect(step).toBeDefined();
+    const legal = step!.legalTargetIds ?? [];
+    // Every Outsider and Townsfolk, the Butler excluded.
+    expect(legal).toContain(players[1]!.playerId);
+    expect(legal).toContain(players[2]!.playerId);
+    expect(legal).toContain(players[3]!.playerId);
+    expect(legal).toContain(players[6]!.playerId);
+    // Not themselves, and never Evil.
+    expect(legal).not.toContain(butler.playerId);
+    expect(legal).not.toContain(players[4]!.playerId);
+    expect(legal).not.toContain(players[5]!.playerId);
+  });
+
+  it('uses the TRUE type, so a Recluse registering as Evil is still choosable', () => {
+    // The rule is about the real character, and reading `alignment` for a legality
+    // decision is how a secret ends up in a UI.
+    const { session, players } = makeSession(5);
+    const butler = players[0]!;
+    setCharacter(butler, 'butler');
+    const recluse = players[1]!;
+    setCharacter(recluse, 'recluse');
+    recluse.registration = { alignment: 'evil', characterType: 'outsider' };
+    setCharacter(players[2]!, 'poisoner');
+    setCharacter(players[3]!, 'imp');
+    setCharacter(players[4]!, 'chef');
+    session.phase = 'night';
+    session.nightNumber = 2;
+    openNight(session);
+
+    const step = buildNightOrder(session).find((s) => s.characterId === 'butler');
+    expect((step?.legalTargetIds ?? [])).toContain(recluse.playerId);
+  });
 });

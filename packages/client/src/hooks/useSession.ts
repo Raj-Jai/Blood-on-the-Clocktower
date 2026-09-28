@@ -28,6 +28,10 @@ export interface LobbyPlayer {
   seatIndex: number;
   /** This player has already used their one nomination today. */
   hasNominatedToday: boolean;
+  /** Has this player been nominated today? A player may be nominated only once a day. */
+  hasBeenNominatedToday: boolean;
+  /** Has this dead player spent their one vote for the rest of the game? */
+  usedDeadVote: boolean;
 }
 
 export interface ChatMessageView {
@@ -66,6 +70,22 @@ export interface SessionState {
   nightPrompt: NightPromptPayload | null;
   /** This player's own private night result. Never contains another player's information. */
   nightResult: NightResolvedPayload | null;
+  /**
+   * The most recent result, kept for the whole day so the player can re-read it.
+   *
+   * Split from `nightResult` on purpose. `nightResult` is LIVE: it is shown in the
+   * moment card, and it is cleared at the next dusk, because a result from two nights
+   * ago sitting where tonight's answer should be is exactly the accidental-information
+   * problem the phase-change clear existed to prevent — and it is actively confusing,
+   * since a first-night-only character like the Chef is never woken on night 2, so
+   * nothing would ever overwrite it and their "Night 1" answer would reappear in the
+   * results slot every night for the rest of the game.
+   *
+   * `lastNightResult` is the archive copy: shown only in the More sheet, labelled with
+   * the night it belongs to, and never in the moment card. An Empath comparing last
+   * night's number with tonight's is the whole reason that character is interesting.
+   */
+  lastNightResult: NightResolvedPayload | null;
   /** Storyteller-only: the live night order stepper state. */
   nightOrder: NightOrderUpdatePayload | null;
   /** Storyteller-only: the auditable night log. */
@@ -100,6 +120,7 @@ const initialState: SessionState = {
   demonInherited: null,
   nightPrompt: null,
   nightResult: null,
+  lastNightResult: null,
   nightOrder: null,
   nightLog: [],
   flow: EMPTY_FLOW_STATE,
@@ -150,7 +171,24 @@ export function useSession(socket: Socket | null): SessionState {
         // Likewise the private night prompt/result belong to the night that just
         // ended, so they are dropped at dawn rather than lingering.
         nightPrompt: payload.phase === 'night' ? s.nightPrompt : null,
-        nightResult: payload.phase === 'night' ? s.nightResult : null,
+        /*
+         * ...but the RESULT is not dropped at dawn, and this is deliberate.
+         *
+         * A phase change used to clear it, which meant the window in which a player
+         * could read what they learned was the handful of seconds between "Resolve the
+         * night" and "Move to the day" — and the result was not rendered even then, so
+         * in practice it was never seen at all.
+         *
+         * Clearing at the next night's PROMPT rather than at dawn keeps the original
+         * leak protection intact: tonight's answer cannot be mistaken for an old one,
+         * because the prompt that opens the next night wipes it. Between those two
+         * points it is this player's own information from a night that is over, it is
+         * never sent to anyone else, and on a passed-around phone it is exactly what
+         * an Empath needs to check last night's number against tonight's.
+         */
+        // Cleared at dawn, as it was. The archive copy below is what the player can
+        // re-read; the live slot belongs only to the night currently being played.
+        nightResult: null,
       }));
     };
     const onGrimoireUpdate = (payload: { grimoire: GrimoirePlayerEntry[] }) => {
@@ -227,6 +265,9 @@ export function useSession(socket: Socket | null): SessionState {
         if (s.role === 'player' && s.distribution?.role === 'player' && payload.playerId !== s.distribution.playerId) {
           return s;
         }
+        // A new night opens: the live result slot is emptied, because tonight's answer
+        // is not last night's. `lastNightResult` deliberately survives, so the player
+        // can still read what they learned while they are waiting to be woken.
         return { ...s, nightPrompt: payload, nightResult: null };
       });
     };
@@ -235,7 +276,7 @@ export function useSession(socket: Socket | null): SessionState {
         if (s.role === 'player' && s.distribution?.role === 'player' && payload.playerId !== s.distribution.playerId) {
           return s;
         }
-        return { ...s, nightResult: payload, nightPrompt: null };
+        return { ...s, nightResult: payload, lastNightResult: payload, nightPrompt: null };
       });
     };
     const onNightOrderUpdate = (payload: NightOrderUpdatePayload) => {

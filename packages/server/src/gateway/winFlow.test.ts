@@ -128,6 +128,116 @@ describe('win/end-game gateway flow', () => {
     teardown(stSocket, playerSockets);
   }, 20000);
 
+  it('the Slayer nominating the Demon kills them and ENDS the game, with no Execute button', async () => {
+    /*
+     * The real-browser probe of this character left the game running at `day-discussion`
+     * after the Imp was Slain, which reads as "the Demon died and nothing happened".
+     *
+     * The rules layer was verified separately and does end the game, so this is the path
+     * that decides it, and it is the one worth pinning: `announceImmediateExecution` is a
+     * new function with no test of its own, and its job is exactly this — kill the Demon,
+     * then run the normal post-death sweep.
+     */
+    const { stSocket, playerSockets, players } = await setUpGame(5);
+    const [slayer, demon, t1, t2, t3] = players;
+    setCharacter(slayer!, 'townsfolk', 'slayer');
+    setCharacter(demon!, 'demon', 'imp');
+    setCharacter(t1!, 'townsfolk', 'chef');
+    setCharacter(t2!, 'townsfolk', 'empath');
+    setCharacter(t3!, 'townsfolk', 'washerwoman');
+
+    const opened = waitFor<any>(stSocket, ServerEvents.NominationOpened);
+    playerSockets[0]!.emit(ClientEvents.PlayerNominate, { targetPlayerId: demon!.playerId });
+    const nomination = await opened;
+
+    for (let i = 0; i < 3; i++) {
+      const p = waitFor<any>(stSocket, ServerEvents.NominationVoteUpdate);
+      playerSockets[i]!.emit(ClientEvents.PlayerVote, { nominationId: nomination.nominationId, voting: true });
+      await p;
+    }
+
+    // The game must end from the vote CLOSE. There is no Execute step, so nothing else
+    // is sent before the assertion — if this passes, the Slayer is what ended it.
+    // Both listeners are attached BEFORE the emit. `broadcastGameEnded` sends FlowUpdate
+    // immediately after GameEnded, so a listener added after `await ended` never sees it —
+    // which reads exactly like "the game did not end".
+    const endedP = waitFor<any>(stSocket, ServerEvents.GameEnded);
+    const flowP = waitFor<any>(stSocket, ServerEvents.FlowUpdate);
+    stSocket.emit(ClientEvents.StorytellerCloseVote, { nominationId: nomination.nominationId });
+    const [result, flow] = await Promise.all([endedP, flowP]);
+
+    expect(result.winner).toBe('good');
+    // Its OWN reason. Reusing `demon-self-killed` announced to the whole table that the
+    // Demon killed themself, which is a different event and something the table would not
+    // believe.
+    expect(result.reason).toBe('demon-slain');
+    expect(demon!.alive).toBe(false);
+    // No execution is left waiting to be confirmed, which is what "immediately" means.
+    expect(flow.stage).toBe('ended');
+    expect(flow.executionPending).toBe(false);
+
+    teardown(stSocket, playerSockets);
+  }, 20000);
+
+  it('hand-killing the Saint with Mark Dead loses the game for Good, as an execution would', async () => {
+    /*
+     * "If you die by execution, your team loses."
+     *
+     * This path went straight to `handlePostDeath`, which knows about the Demon's death and
+     * Evil's 2-alive condition but nothing about the Saint — so a Storyteller could hand-kill
+     * the Saint and Evil simply carried on, while the same death reached by nomination ended
+     * the game. Same event, two answers, decided by which button was pressed.
+     */
+    const { session, stSocket, playerSockets, players } = await setUpGame(5);
+    const [saint, demon, minion, t1, t2] = players;
+    setCharacter(saint!, 'outsider', 'saint');
+    setCharacter(demon!, 'demon', 'imp');
+    setCharacter(minion!, 'minion', 'poisoner');
+    setCharacter(t1!, 'townsfolk', 'chef');
+    setCharacter(t2!, 'townsfolk', 'empath');
+    session.phase = 'day';
+    session.dayNumber = 1;
+
+    const ended = waitFor<any>(stSocket, ServerEvents.GameEnded);
+    stSocket.emit(ClientEvents.StorytellerMarkDead, { playerId: saint!.playerId });
+    const result = await ended;
+
+    expect(result).toEqual({ winner: 'evil', reason: 'saint-executed' });
+    expect(session.phase).toBe('ended');
+    expect(saint!.alive).toBe(false);
+
+    teardown(stSocket, playerSockets);
+  }, 20000);
+
+  it('hand-killing a POISONED Saint does not lose the game, because their ability is not working', async () => {
+    // The other half of the Saint's ruling, and the reason the check cannot simply be
+    // "was the executed player the Saint". A poisoned player has no ability, and poison
+    // covers the day it was cast, so a Saint poisoned before being executed really does not
+    // take their team down with them. This is a well-known ruling and getting it wrong hands
+    // Evil an instant, unearned win.
+    const { session, stSocket, playerSockets, players } = await setUpGame(5);
+    const [saint, demon, minion, t1, t2] = players;
+    setCharacter(saint!, 'outsider', 'saint');
+    setCharacter(demon!, 'demon', 'imp');
+    setCharacter(minion!, 'minion', 'poisoner');
+    setCharacter(t1!, 'townsfolk', 'chef');
+    setCharacter(t2!, 'townsfolk', 'empath');
+    session.phase = 'day';
+    session.dayNumber = 1;
+    saint!.statusEffects.poisoned = true;
+
+    const died = waitFor<any>(stSocket, ServerEvents.GrimoireUpdate);
+    stSocket.emit(ClientEvents.StorytellerMarkDead, { playerId: saint!.playerId });
+    await died;
+    await new Promise((r) => setTimeout(r, 150));
+
+    expect(saint!.alive).toBe(false);
+    expect(session.phase).toBe('day');
+    expect(session.gameResult).toBeNull();
+
+    teardown(stSocket, playerSockets);
+  }, 20000);
+
   it('StorytellerDemonKill self-kill with a living Minion causes inheritance, notifies the Storyteller, and does not end the game', async () => {
     const { session, stSocket, playerSockets, players } = await setUpGame(5);
     // A night kill now requires the night phase (the kill button used to be live

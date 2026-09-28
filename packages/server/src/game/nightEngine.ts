@@ -19,6 +19,7 @@ import {
   chefEvilPairCount,
   empathEvilNeighbourCount,
   executedPlayerToday,
+  executedRegisteredCharacterName,
   effectiveCharacterDef,
   fortuneTellerFindsDemon,
   isDrunkCover,
@@ -151,9 +152,25 @@ export function buildNightOrder(session: GameSession): NightStep[] {
     steps.push(buildStep(session, player, def, order, isFirstNight));
   }
 
+  /*
+   * A Ravenkeeper who is owed their one wake, and only those.
+   *
+   * "If you die at night, you are woken to choose a player." This loop used to add every
+   * dead Ravenkeeper to every night with no condition at all, so one who died at night was
+   * woken again every night afterwards AND one who was executed was woken too, which never
+   * happens in the real game. A Ravenkeeper executed on day 1 got a free look at a
+   * character every night for the rest of the game.
+   *
+   * The step has to be visible HERE and not only in `appendRavenkeeperWake`, because
+   * `isNightFinished` and the Storyteller's outstanding list both enumerate this function.
+   * A deferred step the order cannot see is a night that never finishes. So the wake is
+   * owed while `ravenkeeperWakePending` is set, and that flag — not `alive` — is what
+   * distinguishes died-at-night-and-unwoken from executed and from already-woken.
+   */
   for (const player of playersInSeatOrder(session)) {
     if (player.alive) continue;
     if (player.character !== 'ravenkeeper') continue;
+    if (!player.ravenkeeperWakePending) continue;
     const def = getCharacterById('ravenkeeper');
     if (!def) continue;
     const order = orderFor(def, isFirstNight) ?? Number.MAX_SAFE_INTEGER;
@@ -471,6 +488,16 @@ export function submitNightChoice(
     `${waker.displayName} (${def.name}) chose ${targetIds.map((id) => nameOfPlayer(session, id)).join(' and ')}.`
   );
 
+  /*
+   * The Ravenkeeper's wake is spent. Until this, `ravenkeeperWakePending` keeps the step
+   * in `buildNightOrder` so the night cannot be declared finished over an open pick — but
+   * if it stayed set, EVERY later night would list the step again with no stored record,
+   * and the night would be permanently unfinished and unfinishable. It is a one-shot.
+   */
+  if (def.id === 'ravenkeeper' && !waker.alive) {
+    waker.ravenkeeperWakePending = false;
+  }
+
   // Outside the `io` guard on purpose: whether a night is finished is a fact about
   // the steps, not about who is connected, and a late pick (the Ravenkeeper woken by
   // the night kill) is the thing that usually finishes it.
@@ -617,16 +644,18 @@ export function resolveNight(session: GameSession, io: SocketIOServer): NightRes
           stored,
           info,
           renderCountInfo(info, {
-            zero: 'You learn that none of your living neighbours is evil.',
-            one: 'You learn that one of your living neighbours is evil.',
-            many: (n) => `You learn that ${n} of your living neighbours are evil.`,
+            zero: 'You learn that none of your living neighbors is evil.',
+            one: 'You learn that one of your living neighbors is evil.',
+            many: (n) => `You learn that ${n} of your living neighbors are evil.`,
           })
         );
         break;
       }
       case 'undertaker': {
-        const executed = executedPlayerToday(session);
-        const info = generateCharacterInfo(lieContext(session, waker, def.id), executed?.character ?? null);
+        // The REGISTERED character, not the true one: an executed Spy who registers as
+        // the Butler is shown the Butler.
+        const registered = executedRegisteredCharacterName(session);
+        const info = generateCharacterInfo(lieContext(session, waker, def.id), registered);
         const text = info.value ? renderCharacterInfo(info, '???') : 'You learn that nobody died by execution today.';
         deliverInfo(session, io, waker, def, stored, info, text);
         break;
@@ -664,6 +693,16 @@ export function resolveNight(session: GameSession, io: SocketIOServer): NightRes
         break;
       }
       case 'spy': {
+        // A poisoned or drunk Spy has no functioning ability, so they see no Grimoire.
+        // This case never consulted `abilityWorks`, unlike every other ability, so a
+        // poisoned Spy was handed the entire table every single night — the single
+        // largest information leak in the game, and reachable as soon as the Poisoner
+        // picks the Spy, which is the obvious first move at that seat.
+        if (!abilityWorks) {
+          logNightEvent(session, 'ability-failed', `Spy ${waker.displayName} is drunk/poisoned; they saw no Grimoire.`);
+          sendResolved(session, io, waker, def, stored, 'You are drunk/poisoned. You did not see the Grimoire tonight.', undefined);
+          break;
+        }
         // The Grimoire goes to the Spy and to nobody else, on the Spy's own
         // socket — never to the session room. This is the one place a player is
         // given the whole Grimoire, and it is correct: the Spy's character text
@@ -783,6 +822,10 @@ export function resolveNight(session: GameSession, io: SocketIOServer): NightRes
           if (result.killed) {
             report.killedPlayerIds.push(target.playerId);
             logNightEvent(session, 'night-kill', `The Imp killed ${target.displayName}.`);
+            // Arm the one wake. Cleared when they spend it, so it cannot fire twice.
+            if (target.character === 'ravenkeeper') {
+              target.ravenkeeperWakePending = true;
+            }
             if (target.character === 'mayor') {
               logNightEvent(
                 session,

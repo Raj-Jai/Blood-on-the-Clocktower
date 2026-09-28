@@ -46,6 +46,21 @@ export type FlowStage =
   | 'day-discussion'
   /** A nomination is open and being voted on. */
   | 'day-voting'
+  /**
+   * The vote has passed and the nomination is waiting for the Storyteller to confirm
+   * the execution. This had NO stage, which is why the game could not be played.
+   *
+   * The Execute button was gated on `stage === 'day-voting' && executionPending`, and
+   * `executionPending` is only ever set by `closeVote` — which also sets `closed`, which
+   * is the one thing that takes the flow OUT of `day-voting`. The two conditions were
+   * mutually exclusive by construction, so an execution could never be confirmed, and the
+   * Storyteller was shown "This nomination met the threshold. Execute them when the table
+   * is ready" with no way to do it.
+   *
+   * This stage is that state: it exists so "closed, qualifying, awaiting execution" has a
+   * name, rather than being expressed as the absence of a stage.
+   */
+  | 'day-execution-pending'
   | 'ended';
 
 export interface FlowState {
@@ -82,6 +97,31 @@ export interface FlowState {
   /** A qualifying nomination awaits the Storyteller's execution confirmation. */
   executionPending: boolean;
   executedPlayerName: string | null;
+  /**
+   * `ceil(alivePlayers / 2)` — how many votes carry a nomination.
+   *
+   * Public by construction, like the rest of this object, and public by necessity: the
+   * real game shouts the count out as the hands go up, and the rule is "the number of
+   * votes EQUALS OR EXCEEDS half the number of alive players". Telling players a
+   * "simple majority" instead is a different, stricter rule and disagrees on every even
+   * table — 3 of 6 carries under the real rule, 4 does not. 0 during the night, where
+   * no vote can be open.
+   */
+  executionThreshold: number;
+  /**
+   * A death that a day character forced with no vote to confirm, or null.
+   *
+   * The Virgin ("executed immediately") and the Slayer ("they die immediately") both
+   * resolve the moment their condition is met, so the Storyteller never presses Execute
+   * for them. The table still needs the REASON: a player who sees a nomination resolve
+   * into a death with no vote has to be told it was their own character, or the game
+   * looks broken. Public information by construction — a name and which character did it.
+   */
+  immediateExecution: {
+    playerName: string;
+    cause: 'virgin' | 'slayer';
+    byCharacterName: string;
+  } | null;
   /** The server's clock when this was built, so a countdown needs no offset maths. */
   now: number;
   /**
@@ -115,6 +155,8 @@ export const EMPTY_FLOW_STATE: FlowState = {
   votingOpen: false,
   executionPending: false,
   executedPlayerName: null,
+  executionThreshold: 0,
+  immediateExecution: null,
   now: 0,
   wakeBlockedUntil: null,
   closingPlayerName: null,
@@ -242,13 +284,23 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
     case 'day-voting':
       return {
         say: 'Voting is open. Hands up if you are in.',
-        action: flow.executionPending
-          ? 'The vote passed. Confirm the execution.'
-          : 'Close the vote when the table has decided.',
-        canAdvance: flow.executionPending,
+        action: 'Close the vote when the table has decided.',
+        canAdvance: false,
         progress: 'Voting',
         now: flow.now,
       };
+    case 'day-execution-pending': {
+      // The nomination is public — the whole table just voted on it by name — so saying
+      // who it is leaks nothing.
+      const who = flow.executedPlayerName ?? 'The nominated player';
+      return {
+        say: `${who} is executed.`,
+        action: 'Confirm the execution. Nobody may nominate until this is resolved.',
+        canAdvance: true,
+        progress: 'The vote passed',
+        now: flow.now,
+      };
+    }
     case 'day-discussion':
       return {
         say: 'Anyone can nominate. Otherwise, discuss.',
@@ -281,6 +333,16 @@ export function deriveStorytellerLine(flow: FlowState): StorytellerLine {
 
 export interface PlayerFlowContext {
   playerId: string;
+  /**
+   * This player's own display name, so a moment can address them by name.
+   *
+   * Public by construction — a display name is allowed in `FlowState` and is what the
+   * app already uses to say "Bram, wake up". It is needed for the one moment where a
+   * player has to be told something about THEMSELVES: "you have been nominated and the
+   * vote passed". Telling the table it happened is not enough, because being executed is
+   * not something the app should let them read off a neighbour's screen.
+   */
+  displayName: string;
   alive: boolean;
   /** The player has a night prompt open and owes a choice. */
   hasOpenNightPrompt: boolean;
@@ -290,6 +352,31 @@ export interface PlayerFlowContext {
   hasSubmittedNightChoice: boolean;
   /** The player is Evil and the Evil chat is theirs to use. */
   isEvil: boolean;
+  /**
+   * The server has sent this player their result for the night — the Chef's pairs,
+   * the Empath's neighbours, the 1-of-2, the Fortune Teller's yes/no.
+   *
+   * This is the whole point of the app: it knows what each player learns. It used to
+   * be computed, stored on the player record and then never rendered, because the only
+   * component that can show a result was gated behind `showNightPrompt`, which is true
+   * only while a player still OWES a choice — and the result arrives at resolve, when
+   * nobody owes one any more. Watched all seven players' windows at six beats of a real
+   * night: the string "You learn" appeared zero times. The Chef and the Empath, who
+   * never get a picker at all, could never see theirs by construction.
+   */
+  hasNightResult: boolean;
+  /**
+   * Does this player still have a vote token?
+   *
+   * "Each dead player may vote for only one player throughout the rest of the game" —
+   * one vote for the whole game, not one a day, and not one per nomination. The server
+   * has always enforced this correctly, but nothing reached the client, so a ghost who
+   * had already voted was told "You are dead — but you have one vote left" and handed a
+   * live button, on every nomination, for the rest of the game. It is the single most
+   * surprising rule in the game, so being told a falsehood about it is worse than
+   * saying nothing.
+   */
+  hasVoteToken: boolean;
 }
 
 /** How urgent a moment is, which is what its colour and icon follow. */

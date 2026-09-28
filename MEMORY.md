@@ -46,42 +46,41 @@ the server tests will pass against stale code and tell you nothing.
 
 ## The game simulator
 
-Unit tests cannot tell you whether a game is playable. `/tmp/play` holds a harness
-that drives real browser windows through real games, clicking the real UI and
-reading the real DOM at every beat.
+Unit tests cannot tell you whether a game is playable. The harness lives in the repo at
+`tools/playtest/` and drives real browser windows through real games, clicking the real UI
+and reading the real DOM at every beat. Start the server (`:3001`) and the client (`:5173`)
+first.
 
-- `/tmp/play/ui.mjs` — opens the windows, seeds each one's `localStorage`, and
-  exposes scoped helpers (`playerSubmit`, `nominateFrom`, `state`, `stMoreClick`, …).
-- `/tmp/play/ui-game.mjs` — plays whole games: night, dawn, nomination, vote, death.
-  `NIGHTS=3 node ui-game.mjs` from `/tmp/play`.
-- `/tmp/play/ui-sizes.mjs` — the same at 5, 6 and 7 players. `SIZES=5,6,7 NIGHTS=3`.
-- `/tmp/play/sweep.mjs` — a fast socket-only sweep of every legal table size,
-  5 to 15. No browsers, so it covers the whole range in seconds and can play many
-  games. `SIZES=5,15 GAMES=2 MAX_NIGHTS=25 node sweep.mjs`.
-- `/tmp/play/moments.mjs`, `st-views.mjs` — screenshot every distinct moment, for
-  judging the UI by looking at it rather than by reading the JSX.
-- `/tmp/play/probe-*.mjs` — single-purpose probes written while chasing a bug.
+- `table.mjs` / `lib.mjs` — the table harness. The Storyteller clicks **Create Game**, the
+  join code is read off the lobby screen, and each player types that code and their name
+  into the join form. **No session is ever created by calling the REST API.**
+- `play-game.mjs` — plays whole games: night, dawn, nomination, vote, death.
+  `PLAYERS=7 NIGHTS=2 node tools/playtest/play-game.mjs`.
+- `scenarios.mjs` — named scenarios. `SCENARIO=vote node tools/playtest/scenarios.mjs`.
+- `smoke.mjs` — harness self-test; run this first.
+- Probes, one per finding, each reading a real screen: `probe-execution.mjs`,
+  `probe-characters.mjs` (the Virgin and the Slayer), `probe-evil-leak.mjs`,
+  `probe-results.mjs`, `probe-renominate.mjs`, `probe-vote.mjs`.
+- `summary.html` — the fix log, written for the table rather than for us.
+  `restart-server.sh` — rebuild shared + server, kill the old `:3001`, wait for the port.
+- Screenshots and per-run logs land in `tools/playtest/shots/`.
 
-This is what found essentially every real bug in the recent work. A test that
-passes 170 times and then fails on a random roster is usually telling you the
-product has two defensible answers and the test picked one.
+Harness rules, both learned by wasting an hour:
 
-Two hard-won rules for that harness:
+1. **Never open a second socket** for a player or the Storyteller. It steals their private
+   prompts and looks exactly like a lost-prompt bug. Read state from the real windows.
+2. **Scope every click to its panel.** Whole-page text matching hits the wrong control — the
+   moment card's "Nominate someone" contains "Nominate" and sits above the Nominate panel's
+   own button.
 
-1. **Never open a second socket for a player or the Storyteller.** `sendToPlayer`
-   and `sendToStoryteller` (in `game/broadcast.ts`) emit to a single
-   `connectionId`, so a second socket *steals* that player's private night prompts
-   and the browser then looks like it lost them. This manufactured an hour of
-   chasing a bug that did not exist. Read state from the real windows instead.
-2. **Scope every click to its panel.** Matching button text across a whole page
-   hits the wrong control: the TurnGuide's "Nominate someone" contains "Nominate"
-   and sits above the Nominate panel's own "Nominate" button.
+Playwright is not a dependency; `table.mjs` resolves it from `PLAYWRIGHT_PATH` or the npx
+cache and throws with instructions if it cannot.
 
-Driver assertions that are *correct app behaviour* and not bugs, learned the hard
-way: the Fortune Teller picks two players so "Send my choice" stays disabled after
-one click; a dead player cannot nominate; a nomination left open blocks the next
-one; and a step can still read "waiting on a choice" at `night-resolving`, because
-resolving with a choice missing is allowed and logged rather than blocked.
+**A harness that quietly loses its table looks exactly like a harness proving a bug.** Two
+of the probes reported working characters as broken: one compared `'virgin'` against the
+Grimoire's `"Virgin"` and re-dealt six tables finding nothing, and one reassigned a local
+table variable so the caller kept a closed browser. When a probe says a thing is broken,
+check the probe.
 
 ## One source of truth: "is this step done?"
 
@@ -164,8 +163,21 @@ Worth remembering because each looked like a wording problem and was a rules pro
   existing test called the resolver directly, which skipped the line that duplicated
   it. A test has to drive the path the bug actually lived on.
 
+- Two predicates were written, exported and never called, which is how the Virgin, the
+  Slayer, and — hiding behind the Slayer — a rule that broke the day's central mechanic
+  survived every test run.
+- A test called *"returns the official First Night order"* asserted an order with the
+  Poisoner fifth of seven, after every information role had been told the truth. A test whose
+  name asserts a rule it does not check is worse than no test: it makes the bug look like a
+  decision.
+- Three tests held stale copies of the Empath's ability strings, which is how the app
+  drifted to British "neighbours" while the official card says "neighbors".
+
 The pattern: **a control that the server would refuse is a bug even when the server
 refuses it correctly.** The client is the thing that has to know.
+
+And the pattern above all: **tests that copy production strings or call a resolver directly
+drift, and drift silently.** Assert against the thing the app actually reads.
 
 And the recurring lesson from the sweeps: **a game that makes no progress is the
 harness's fault until proven otherwise.** Both "nobody died in 20 nights" and "8
@@ -174,6 +186,49 @@ character, so the Monk protected exactly whoever the Imp was about to attack, an
 the game could never get anywhere. Deriving health from what the ENGINE recorded
 (the night log) rather than from a broadcast that may or may not arrive is what made
 the real problem visible underneath it.
+
+## Characters that act on their own
+
+The Virgin and the Slayer were dead code for the app's whole life: the predicates existed,
+were exported, and were called by **nothing**. Wiring `slayerWouldKill` up immediately
+turned it into *any player who successfully nominates the Demon kills them instead of being
+executed* — it never checked that the player nominating **was** the Slayer. Dead code does
+not fail; it just looks correct. Existing end-game tests caught it on the first run.
+
+Both now resolve the instant their condition is met, with no vote to confirm and no Execute
+button, and both are published on `session.immediateExecution` and read by the flow.
+
+**One kind of death, two very different deaths.** The Virgin's text is *"they are executed
+immediately"* — a real execution, so `applyExecution` runs: it spends the day's one
+execution, the Undertaker learns the victim, and a Saint nominator loses the game for Good
+on the spot. The Slayer's kill is a character ability, so it does **none** of that: it is
+its own `demon-slain` end reason, a Recluse registering as the Demon can be Slain, and that
+is not a Demon death. `applyExecution` is the single owner of that bookkeeping, because two
+copies of it is how the Undertaker and the Mayor end up disagreeing about the same day.
+
+**Two more "one wake / one protection" facts worth not re-deriving:**
+
+- The Ravenkeeper's wake is one-shot and is granted by the night that killed them, never by
+  an execution. The step has to be visible in `buildNightOrder` — `isNightFinished` and the
+  Storyteller's outstanding list both enumerate it, and a deferred step the order cannot see
+  is a night that never finishes. So the condition is the `ravenkeeperWakePending` flag, which
+  distinguishes died-at-night-and-unwoken from executed and from already-woken. `alive`
+  cannot: it is the same value in all three.
+- Protection is from the **Demon's ability**, and the Soldier is only protected while their
+  ability works, so a poisoned or drunk Soldier dies to the Imp. The Monk is unaffected:
+  theirs is an action already taken, so there is nothing for poison to undo.
+
+## What must never be in a payload
+
+`OwnCharacterPayload.teammates` is identities — a `playerId` and a `displayName`, and
+deliberately **no character field**. "You learn who the other Minions are" is a list of
+names, and only at 7+ players. Every Evil player used to be sent every other Evil player's
+true character name, which is the whole script in one payload at the moment the game starts.
+
+This is why the type is the guarantee: a character name cannot be added to that payload
+without the type changing, and `buildPlayerDistributionPayload` returns `OwnCharacterPayload`
+rather than the wider `DistributionPayload` union precisely so the field stays reachable and
+therefore tested.
 
 ## Known limitations (not bugs, deliberate)
 

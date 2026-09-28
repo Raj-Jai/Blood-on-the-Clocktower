@@ -93,7 +93,21 @@ export function resolveDemonKill(
   if (!killer.alive || killer.characterType !== 'demon') throw Errors.notTheDemon();
   if (!target.alive) throw Errors.targetDead();
 
-  if (target.statusEffects.protected) {
+  /*
+   * Protection is from the DEMON'S ABILITY, and the Soldier is only protected while
+   * their ability is working. The almanac is explicit: "The Poisoner poisons the Soldier,
+   * then the Imp attacks the Soldier. The Soldier dies, because they have no ability while
+   * poisoned."
+   *
+   * This checked the flag alone, so a POISONED Soldier survived the Imp — the single most
+   * important interaction the Soldier has, and the one a table reaches for. The Monk is
+   * unaffected: protection is an action they took, and a poisoned Monk's action simply
+   * never happened.
+   */
+  const protectedAndFunctioning =
+    target.statusEffects.protected && !target.statusEffects.poisoned && !target.statusEffects.drunk;
+
+  if (protectedAndFunctioning) {
     logNightEvent(
       session,
       'kill-blocked',

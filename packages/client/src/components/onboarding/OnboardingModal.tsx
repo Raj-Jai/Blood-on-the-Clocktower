@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { CORE_RULES, DAY_NIGHT_SUMMARY, GOAL_STEP_GENERIC, THEME_STEP } from '@clocktower/shared';
 import type { Alignment } from '@clocktower/shared';
+import { useDialogBehaviour, backdropClick } from '../../hooks/useDialogBehaviour.js';
 
 interface OnboardingModalProps {
   onClose: () => void;
@@ -13,6 +14,9 @@ const STEPS: Step[] = ['theme', 'goal', 'rules'];
 export function OnboardingModal({ onClose, alignment }: OnboardingModalProps) {
   const [stepIndex, setStepIndex] = useState(0);
   const step = STEPS[stepIndex];
+  // Escape and backdrop tap, so this is not a trap with a single exit.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  useDialogBehaviour(true, onClose, panelRef);
 
   const isLast = stepIndex === STEPS.length - 1;
   const isFirst = stepIndex === 0;
@@ -21,6 +25,11 @@ export function OnboardingModal({ onClose, alignment }: OnboardingModalProps) {
     <div
       role="dialog"
       aria-modal="true"
+      aria-label="How to play"
+      ref={(el) => {
+        panelRef.current = el;
+      }}
+      onClick={backdropClick(panelRef, onClose)}
       style={{
         position: 'fixed',
         inset: 0,

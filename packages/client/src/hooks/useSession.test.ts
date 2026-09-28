@@ -54,6 +54,9 @@ function nomination(overrides: Partial<ActiveNominationView> = {}): ActiveNomina
     closed: false,
     pendingExecution: false,
     executed: false,
+    // 6 living players, so ceil(6/2) = 3. Nothing has qualified earlier today.
+    executionThreshold: 3,
+    highestTallyToday: 0,
     ...overrides,
   };
 }

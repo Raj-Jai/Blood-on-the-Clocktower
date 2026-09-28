@@ -36,11 +36,14 @@ function flow(over: Partial<FlowState> = {}): FlowState {
 function ctx(over: Partial<PlayerFlowContext> = {}): PlayerFlowContext {
   return {
     playerId: ADA,
+    displayName: 'Ada',
     alive: true,
     hasOpenNightPrompt: false,
     hasSubmittedNightChoice: false,
     stepIsUnmakeable: false,
     isEvil: false,
+    hasNightResult: false,
+    hasVoteToken: true,
     ...over,
   };
 }

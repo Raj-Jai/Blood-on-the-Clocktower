@@ -115,14 +115,27 @@ export function livingNeighbourIds(session: GameSession, playerId: string): stri
 /**
  * Undertaker: "which character died by execution today?"
  *
- * Read from the executed nomination record rather than from a "last executed"
- * field, because the rules allow a tie to invalidate an earlier qualifying
- * nomination; the surviving record is the only executed player.
+ * This used to read `resolvedNominationsToday[0]`, on the reasoning that a tie
+ * invalidates an earlier nomination so "the surviving record is the only executed
+ * player". That reasoning was wrong twice over: `confirmExecution` DELETED the record
+ * the moment it executed, so the list was always empty and the Undertaker was told
+ * "You learn that nobody died by execution today" after every single execution. The
+ * list is also no longer "who died" at all — a nomination tied out is on it and was
+ * never executed.
+ *
+ * So the Undertaker reads `session.executedToday`, written at the moment of execution.
+ * The character is the REGISTERED one, per the almanac: an executed Spy who registers
+ * as the Butler is shown the Butler, and an executed Recluse is shown the Imp.
  */
 export function executedPlayerToday(session: GameSession): PlayerRecord | null {
-  const record = session.resolvedNominationsToday[0];
+  const record = session.executedToday;
   if (!record) return null;
-  return session.players.get(record.targetId) ?? null;
+  return session.players.get(record.playerId) ?? null;
+}
+
+/** The character the Undertaker is shown: what the table knew the dead person to be. */
+export function executedRegisteredCharacterName(session: GameSession): string | null {
+  return session.executedToday?.registeredCharacterName ?? null;
 }
 
 /**
@@ -193,6 +206,27 @@ export function legalTargetsFor(
       if (restrictions.includes('outsider') && effectiveType !== 'outsider') return false;
       if (restrictions.includes('minion') && effectiveType !== 'minion') return false;
       if (restrictions.includes('demon') && effectiveType !== 'demon') return false;
+    }
+
+    /*
+     * The Butler's rule, which is NOT the `good` restriction above.
+     *
+     * "Each night, choose a player (not yourself): tomorrow, you may only vote if they
+     * are voting too." The Storyteller may not let the Butler choose a Minion or the
+     * Demon — that is the whole reason the character restricts voting at all.
+     *
+     * Two things were wrong here. The data said `townsfolk`, so the Butler could not
+     * choose a Saint, a Recluse, a Drunk or a Ravenkeeper — every Outsider in Trouble
+     * Brewing — which removed legal moves the real game allows. And expressing the rule
+     * as `good` would have used `perceivedAs().alignment`, which is wrong twice over: a
+     * Recluse registering as Evil would be excluded, and reading `alignment` for a
+     * legality decision is how a secret ends up rendered in a UI.
+     *
+     * So this reads the TRUE character type. That is not a leak: the legal-target list is
+     * a Storyteller-side computation, and the rule genuinely is about the true type.
+     */
+    if (restrictions.includes('not-demon-or-minion')) {
+      if (candidate.characterType === 'minion' || candidate.characterType === 'demon') return false;
     }
 
     if (restrictions.includes('evil') || restrictions.includes('good')) {
@@ -271,6 +305,18 @@ export function virginTriggersExecution(session: GameSession, virginId: string, 
 export function slayerWouldKill(session: GameSession, slayerId: string, targetId: string): boolean {
   const slayer = session.players.get(slayerId);
   if (!slayer || !slayer.alive) return false;
+  /*
+   * THE CHARACTER IS NOT ACTUALLY CHECKED HERE.
+   *
+   * This predicate was dead code for the whole life of the app, so the omission was
+   * invisible: it checked that the "Slayer" was alive, that the ability was unused, and
+   * that the TARGET registered as the Demon — and never that the player doing the
+   * nominating was the Slayer. Wiring it up turned that into "any player who
+   * successfully nominates the Demon kills them instead of being executed", which is not
+   * a subtle misplay. It is the difference between the game's central day mechanic
+   * working and not working, and it was one line.
+   */
+  if (slayer.character !== 'slayer') return false;
   if (session.slayerHasUsed) return false;
   const target = session.players.get(targetId);
   if (!target || !target.alive) return false;

@@ -33,12 +33,18 @@ export type PlayerMomentKind =
   | 'awake-choose'
   | 'awake-listen'
   | 'awake-done'
+  /** The information this player learned overnight. Shown on its own, briefly. */
+  | 'night-result'
   | 'night-over'
   | 'day-reveal'
   | 'discuss'
   | 'nominate'
   | 'vote'
   | 'voted'
+  /** This player's nomination passed. They are about to be executed. */
+  | 'on-the-block'
+  /** Somebody else's nomination passed. */
+  | 'vote-passed'
   | 'dead'
   | 'ended';
 
@@ -133,6 +139,37 @@ export function derivePlayerMoment(flow: FlowState, ctx: PlayerFlowContext): Pla
       };
     }
 
+    /*
+     * WHAT YOU LEARNED, and this is the information the whole game runs on.
+     *
+     * The server resolves the night and sends every learn-in character their result.
+     * Until now the client simply never showed it: the only component that renders a
+     * result is gated on `showNightPrompt`, which is true only while a player still owes
+     * a CHOICE, and by resolve time nobody owes one. The result arrives into a state
+     * that deliberately hides it.
+     *
+     * Priority matters here, and it is the order of the three beats a real table has:
+     *   1. you are awake and owe a choice   -> the choice wins
+     *   2. you have been told what you learn -> the information wins
+     *   3. you are done, close your eyes    -> the quiet fallback
+     * So this sits below `awake-choose` and above `awake-done`, and a dead player is
+     * excluded because a ghost is told nothing overnight.
+     */
+    if (ctx.alive && ctx.hasNightResult) {
+      return {
+        ...base,
+        kind: 'night-result',
+        title: 'Here is what you learned.',
+        detail: 'Read it, then close your eyes. The table will open them at dawn.',
+        tone: 'action',
+        action: 'none',
+        // The panel below renders the RESULT, with no picker: `NightPromptPanel`
+        // already handles a result arriving without a prompt, which is exactly the
+        // Chef's and the Empath's case, since they are never given one.
+        showNightPrompt: true,
+      };
+    }
+
     // The night is over and there is nothing left for this player to do.
     if (flow.stage === 'night-resolving' && !ctx.hasOpenNightPrompt) {
       return {
@@ -198,6 +235,22 @@ export function derivePlayerMoment(flow: FlowState, ctx: PlayerFlowContext): Pla
   // ------------------------------------------------------------------ day ---
 
   if (flow.stage === 'day-reveal') {
+    // The table reads the Grimoire together, and a player reading their own overnight
+    // information at the same moment is exactly the real game. It stays in the moment
+    // card for this beat and then yields: once discussion starts, "what am I doing
+    // now" is the more urgent question. It does not go away — it is still readable in
+    // the More sheet for the rest of the day.
+    if (ctx.alive && ctx.hasNightResult) {
+      return {
+        ...base,
+        kind: 'night-result',
+        title: 'Here is what you learned.',
+        detail: 'The table is reading the Grimoire now. Keep this somewhere safe.',
+        tone: 'action',
+        action: 'none',
+        showNightPrompt: true,
+      };
+    }
     return {
       ...base,
       kind: 'day-reveal',
@@ -208,15 +261,66 @@ export function derivePlayerMoment(flow: FlowState, ctx: PlayerFlowContext): Pla
     };
   }
 
+  if (flow.stage === 'day-execution-pending') {
+    /*
+     * THE MOMENT THE WHOLE DAY IS ABOUT, and it used to say nothing at all.
+     *
+     * Once a vote passed, the flow left `day-voting` entirely, so every player's moment
+     * went back to "Talk it over. Nominate if you have a reason." The nominee — who was
+     * just voted for, by name, in front of everyone — was told nothing had happened, and
+     * was handed a live Nominate button. The server would have accepted that nomination,
+     * which silently destroyed the pending execution.
+     *
+     * Two moments, because the table needs different things: the person on the block
+     * needs to know they are about to die, and everyone else needs to know the vote
+     * passed and why nobody may nominate. Neither has a control — there is nothing to do
+     * about being executed, and the day's remaining business is the Storyteller's.
+     */
+    if (flow.executedPlayerName && flow.executedPlayerName === ctx.displayName) {
+      return {
+        ...base,
+        kind: 'on-the-block',
+        title: 'You have been nominated, and the vote passed.',
+        detail: 'You are about to be executed. Nothing on this screen changes that — remember who voted.',
+        tone: 'action',
+        action: 'none',
+      };
+    }
+    return {
+      ...base,
+      kind: 'vote-passed',
+      title: `${flow.executedPlayerName ?? 'The nominated player'} is about to be executed.`,
+      detail: 'The vote passed. Nobody may nominate until the Storyteller confirms it.',
+      tone: 'talk',
+      action: 'none',
+    };
+  }
+
   if (flow.stage === 'day-voting') {
-    // A dead player keeps exactly one vote, and the app must not pretend
-    // otherwise: this is the single most surprising rule in the game for a new
-    // player, so it is stated rather than left to be discovered.
+    // A dead player keeps exactly one vote, for the REST OF THE GAME, and the app must
+    // not pretend otherwise: this is the single most surprising rule in the game for a
+    // new player, so it is stated rather than left to be discovered.
+    //
+    // Once it is spent, the moment says so and stops offering an action. It used to say
+    // "you have one vote left" forever, and hand over a button that could only ever come
+    // back as an error — a player who believed the app about its own most surprising
+    // rule would learn to distrust everything else it told them.
     if (!ctx.alive) {
+      if (!ctx.hasVoteToken) {
+        return {
+          ...base,
+          kind: 'dead',
+          title: 'You are dead, and your vote is spent.',
+          detail: 'You get one vote for the whole game, not one a day. Nothing else is required of you.',
+          tone: 'wait',
+          action: 'none',
+          mayStillVote: false,
+        };
+      }
       return {
         ...base,
         kind: 'dead',
-        title: 'You are dead — but you have one vote left.',
+        title: 'You are dead — you have your one vote for the whole game.',
         detail: 'Use it below if you want to. Nothing else is required of you.',
         tone: 'action',
         action: 'vote',
@@ -227,7 +331,16 @@ export function derivePlayerMoment(flow: FlowState, ctx: PlayerFlowContext): Pla
       ...base,
       kind: 'vote',
       title: 'Vote: hands up if you are in.',
-      detail: 'A simple majority of the living players executes. You can change your vote until the Storyteller closes it.',
+      // The rule is "the number of votes EQUALS OR EXCEEDS half the number of alive
+      // players". This said "A simple majority of the living players executes", which is
+      // a different and stricter rule: it disagrees on every even table, where half or
+      // more is N/2 and a majority is N/2+1. A player told they need a majority sits on
+      // their hand at 4 of 6 and watches the vote carry anyway. The number itself is
+      // public, so it is stated rather than described.
+      detail:
+        flow.executionThreshold > 0
+          ? `${flow.executionThreshold} of the living players is enough to execute. You can change your vote until the Storyteller closes it.`
+          : 'Half of the living players, or more, executes. You can change your vote until the Storyteller closes it.',
       tone: 'action',
       action: 'vote',
     };

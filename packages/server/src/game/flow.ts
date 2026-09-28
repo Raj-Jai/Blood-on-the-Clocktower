@@ -9,6 +9,7 @@ import {
   wakeGateIsPending,
 } from './nightEngine.js';
 import { sendToStoryteller } from './broadcast.js';
+import { executionThreshold } from './rules.js';
 
 /**
  * Builds the public, room-wide flow state.
@@ -22,6 +23,26 @@ import { sendToStoryteller } from './broadcast.js';
  * Grimoire entry. This object goes to every socket and, on the host device, gets
  * read aloud. See the leak invariant documented in shared/protocol/flow.ts.
  */
+/**
+ * The forced death, if the last day action caused one, in words the table can read aloud.
+ *
+ * Deliberately NOT folded into `announcement`: the announcement is the day's state and
+ * must keep describing the day. This is a one-shot fact about the last thing that
+ * happened, and it is cleared by the next nomination or vote close.
+ */
+function immediateFor(session: GameSession): FlowState['immediateExecution'] {
+  const immediate = session.immediateExecution;
+  if (!immediate) return null;
+  const victim = session.players.get(immediate.playerId);
+  const by = getCharacterById(immediate.byCharacterId);
+  if (!victim) return null;
+  return {
+    playerName: victim.displayName,
+    cause: immediate.cause,
+    byCharacterName: by?.name ?? 'a character',
+  };
+}
+
 export function buildFlowState(session: GameSession, now: number = Date.now()): FlowState {
   const base = {
     dayNumber: session.dayNumber,
@@ -30,6 +51,9 @@ export function buildFlowState(session: GameSession, now: number = Date.now()): 
     nominationId: session.nomination?.id ?? null,
     votingOpen: Boolean(session.nomination && !session.nomination.closed),
     executionPending: Boolean(session.nomination?.pendingExecution),
+    // Default for every stage; the day flow overrides it with the real value. On `base`
+    // rather than repeated in each of the six literal returns that spread it.
+    immediateExecution: null,
   };
 
   if (session.phase === 'lobby') {
@@ -47,6 +71,7 @@ export function buildFlowState(session: GameSession, now: number = Date.now()): 
       resolvedCount: 0,
       readyToResolve: false,
       executedPlayerName: null,
+      executionThreshold: 0,
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: 0,
@@ -69,6 +94,7 @@ export function buildFlowState(session: GameSession, now: number = Date.now()): 
       resolvedCount: 0,
       readyToResolve: false,
       executedPlayerName: null,
+      executionThreshold: 0,
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: 0,
@@ -85,7 +111,13 @@ export function buildFlowState(session: GameSession, now: number = Date.now()): 
 
 type FlowBase = Pick<
   FlowState,
-  'dayNumber' | 'nightNumber' | 'nominationId' | 'votingOpen' | 'executionPending' | 'now'
+  | 'dayNumber'
+  | 'nightNumber'
+  | 'nominationId'
+  | 'votingOpen'
+  | 'executionPending'
+  | 'immediateExecution'
+  | 'now'
 >;
 
 function buildNightFlow(session: GameSession, base: FlowBase, now: number): FlowState {
@@ -106,6 +138,7 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
       resolvedCount: 0,
       readyToResolve: true,
       executedPlayerName: null,
+      executionThreshold: 0,
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: 0,
@@ -142,6 +175,7 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
       resolvedCount: 0,
       readyToResolve: order.every((s) => (s.targetCount ?? 0) === 0 || !s.isPossible),
       executedPlayerName: null,
+      executionThreshold: 0,
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: night.delaySeconds,
@@ -169,6 +203,7 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
       resolvedCount: night.steps.length,
       readyToResolve: false,
       executedPlayerName: null,
+      executionThreshold: 0,
       wakeBlockedUntil: null,
       closingPlayerName: null,
       delaySeconds: night.delaySeconds,
@@ -247,10 +282,15 @@ function buildNightFlow(session: GameSession, base: FlowBase, now: number): Flow
       reason: s.unavailableReason ?? 'there is nobody to choose',
     })),
     executedPlayerName: null,
+    executionThreshold: 0,
   };
 }
 
 function buildDayFlow(session: GameSession, base: FlowBase): FlowState {
+  // How many votes carry a nomination. Carried on every day stage, not just while a
+  // vote is open, so a player can be told what they need to reach BEFORE anybody is
+  // nominated — which is when a player first wonders whether a vote can even pass.
+  const threshold = executionThreshold(session);
   const empty = {
     ...base,
     phase: 'day' as const,
@@ -267,6 +307,8 @@ function buildDayFlow(session: GameSession, base: FlowBase): FlowState {
     closingPlayerName: null,
     delaySeconds: 0,
     unmakeableSteps: [],
+    executionThreshold: threshold,
+    immediateExecution: immediateFor(session),
   };
 
   if (session.nomination && !session.nomination.closed) {
@@ -275,10 +317,34 @@ function buildDayFlow(session: GameSession, base: FlowBase): FlowState {
     return {
       ...empty,
       stage: 'day-voting',
-      announcement: session.nomination.pendingExecution
-        ? 'The vote passed. That player is executed.'
-        : `${nominator?.displayName ?? 'Someone'} nominated ${target?.displayName ?? 'a player'}. Voting is open.`,
-      executedPlayerName: session.nomination.pendingExecution ? (target?.displayName ?? null) : null,
+      announcement: `${nominator?.displayName ?? 'Someone'} nominated ${target?.displayName ?? 'a player'}. Voting is open.`,
+      executedPlayerName: null,
+      executionThreshold: threshold,
+    };
+  }
+
+  /*
+   * Closed, qualifying, and waiting for the Storyteller to confirm. This is a REAL
+   * state and it had no name, which is why the game could not be played: the Execute
+   * button was gated on `day-voting && executionPending`, and the flow only reaches
+   * `day-voting` while a nomination is OPEN, while `executionPending` is only ever set
+   * by the act of closing one. The two could never both be true.
+   *
+   * Naming the nominee here is safe and is what the real table does: the nomination was
+   * public, the vote was public, and everybody just watched it happen. `FlowState` is
+   * broadcast to the room and read aloud, and a display name is explicitly allowed.
+   */
+  if (session.pendingExecution) {
+    const target = session.players.get(session.pendingExecution.targetId);
+    return {
+      ...empty,
+      stage: 'day-execution-pending',
+      announcement: `${target?.displayName ?? 'The nominated player'} is executed.`,
+      executedPlayerName: target?.displayName ?? null,
+      // The id of the nomination WAITING to be executed, which is not necessarily the
+      // most recent one: a later nomination is legal and does not cancel this.
+      nominationId: session.pendingExecution.nominationId,
+      executionThreshold: threshold,
     };
   }
 
@@ -288,6 +354,7 @@ function buildDayFlow(session: GameSession, base: FlowBase): FlowState {
       stage: 'day-reveal',
       announcement: 'Everyone, open your eyes. It is day. Check the Grimoire for the dead.',
       executedPlayerName: null,
+      executionThreshold: threshold,
     };
   }
 
@@ -296,6 +363,7 @@ function buildDayFlow(session: GameSession, base: FlowBase): FlowState {
     stage: 'day-discussion',
     announcement: 'Anyone can nominate. Otherwise, discuss.',
     executedPlayerName: null,
+    executionThreshold: threshold,
   };
 }
 

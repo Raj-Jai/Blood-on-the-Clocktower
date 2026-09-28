@@ -93,6 +93,9 @@ export function SeatingCircle({ players, selfPlayerId, onMoveSeat, size = 280 }:
               {!isAlive(entry) ? '💀' : entry.displayName.slice(0, 2).toUpperCase()}
             </div>
             <span
+              // The name is also the accessible name: `title` is mouse-only, so on a
+              // touch screen the full name of an ellipsised seat was unreachable.
+              aria-label={`${entry.displayName}${isSelf ? ' (you)' : ''}${isAlive(entry) ? '' : ' (dead)'}`}
               style={{
                 fontSize: 12,
                 textAlign: 'center',
@@ -107,18 +110,16 @@ export function SeatingCircle({ players, selfPlayerId, onMoveSeat, size = 280 }:
               {isSelf && <strong> (you)</strong>}
             </span>
             {onMoveSeat && (
-              <div style={{ display: 'flex', gap: 2 }}>
+              <div style={{ display: 'flex', gap: 4 }}>
                 <button
-                  className="btn btn-inline"
-                  style={{ padding: '2px 6px', fontSize: 11 }}
+                  className="btn btn-inline seat-move"
                   aria-label={`Move ${entry.displayName} counter-clockwise`}
                   onClick={() => onMoveSeat(entry.playerId, 'left')}
                 >
                   ↺
                 </button>
                 <button
-                  className="btn btn-inline"
-                  style={{ padding: '2px 6px', fontSize: 11 }}
+                  className="btn btn-inline seat-move"
                   aria-label={`Move ${entry.displayName} clockwise`}
                   onClick={() => onMoveSeat(entry.playerId, 'right')}
                 >

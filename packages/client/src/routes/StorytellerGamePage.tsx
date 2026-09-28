@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAnnouncer } from '../hooks/useAnnouncer.js';
 import { ClientEvents } from '@clocktower/shared';
 import type { Socket } from 'socket.io-client';
@@ -16,6 +16,7 @@ import { Graveyard } from '../components/seating/Graveyard.js';
 import { PhaseTimer } from '../components/shared/PhaseTimer.js';
 import { StorytellerQuestionPanel } from '../components/questions/StorytellerQuestionPanel.js';
 import { RoleReferenceSection } from '../components/reference/RoleReferenceSection.js';
+import { useDialogBehaviour, backdropClick } from '../hooks/useDialogBehaviour.js';
 
 interface StorytellerGamePageProps {
   socket: Socket | null;
@@ -35,6 +36,9 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
   const [dismissedInheritance, setDismissedInheritance] = useState(false);
   // The host device doubles as the table's PA system for PUBLIC flow lines only.
   const announcer = useAnnouncer();
+  // Escape, backdrop tap and focus handling for the tools sheet.
+  const stSheetRef = useRef<HTMLDivElement | null>(null);
+  useDialogBehaviour(moreOpen, () => setMoreOpen(false), stSheetRef);
 
   const grimoire = session.grimoire ?? [];
 
@@ -152,7 +156,13 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
             <strong>{grimoire.find((g) => g.playerId === session.nomination!.targetId)?.displayName}</strong> was
             nominated by {grimoire.find((g) => g.playerId === session.nomination!.nominatorId)?.displayName}.{' '}
             <strong>{session.nomination.votes.filter((v) => v.voting).length}</strong> vote
-            {session.nomination.votes.filter((v) => v.voting).length === 1 ? '' : 's'} for execution.
+            {session.nomination.votes.filter((v) => v.voting).length === 1 ? '' : 's'} for execution
+            {session.nomination.executionThreshold > 0 && (
+              <>
+                , and <strong>{session.nomination.executionThreshold}</strong> is enough
+              </>
+            )}
+            .
           </p>
           {/* Information only. The controls live in the script above, which is the
               panel whose entire job is "what to do now" — and having "Close the
@@ -196,7 +206,7 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
       <div className="panel">
         <h2 style={{ marginTop: 0, textAlign: 'center' }}>Seating Circle</h2>
         <p className="faint" style={{ textAlign: 'center', marginTop: -8 }}>
-          Use the arrows to swap a player with their neighbour.
+          Use the arrows to swap a player with their neighbor.
         </p>
         <SeatingCircle players={grimoire} onMoveSeat={moveSeat} />
         <Graveyard players={grimoire} />
@@ -214,6 +224,10 @@ export function StorytellerGamePage({ socket, session }: StorytellerGamePageProp
           aria-modal="true"
           aria-label="Storyteller tools"
           data-testid="st-more-sheet"
+          ref={(el) => {
+            stSheetRef.current = el;
+          }}
+          onClick={backdropClick(stSheetRef, () => setMoreOpen(false))}
           style={{
             position: 'fixed',
             inset: 0,

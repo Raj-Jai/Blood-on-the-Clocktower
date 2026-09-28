@@ -55,7 +55,16 @@ export interface OwnCharacterPayload {
   characterType: CharacterType;
   alignment: Alignment;
   ability: string;
-  teammates?: { playerId: string; displayName: string; character: string; characterName: string }[];
+  /**
+   * The other Minions, as IDENTITIES only — a name, never a character.
+   *
+   * "You learn who the other Minions are." There is deliberately no `character` field
+   * here. The types are the strongest guarantee available: a character name cannot be
+   * added to this payload without this file changing, which is the point.
+   *
+   * Empty below 7 players, where there is no Minion information at all.
+   */
+  teammates?: { playerId: string; displayName: string }[];
   /** The one fixed bluff character (not in this game) an Evil player can claim to be. Stable for the whole game. */
   bluff?: { id: string; name: string };
   // A Drunk gets the COVER character's name, type, id and ability here, so this
@@ -102,6 +111,26 @@ export interface ActiveNominationView {
   closed: boolean;
   pendingExecution: boolean;
   /**
+   * How many votes carry this nomination: `ceil(alive / 2)`.
+   *
+   * This is PUBLIC. The table shouts the number out as the hands go up, and the rule
+   * is "the number of votes equals or exceeds half the number of alive players" — so
+   * the number a player needs is the single most useful thing the app could show them
+   * during a vote. It was in no payload at all: the tally rendered a bare numerator
+   * and the outcome line said "met the threshold" with no figure, so a player who had
+   * counted hands could not tell whether the vote was won, lost, or one short.
+   */
+  executionThreshold: number;
+  /**
+   * The highest tally any earlier nomination reached today, which a new nomination
+   * must STRICTLY exceed, or 0 when nothing has qualified yet today.
+   *
+   * Public for the same reason: the table keeps score, and the rule that a tie
+   * invalidates both nominations and that a later nominee must beat the tied number is
+   * otherwise invisible.
+   */
+  highestTallyToday: number;
+  /**
    * The execution has already been carried out.
    *
    * Without this the Storyteller's "Execute X" button stayed live forever after they
@@ -128,6 +157,11 @@ export type WinningTeam = 'good' | 'evil';
 export type GameEndReason =
   | 'demon-executed'
   | 'demon-self-killed'
+  /**
+   * The Slayer successfully named the Demon. Its own reason because the alternative is
+   * telling the table the Demon killed themself, which is a different event entirely.
+   */
+  | 'demon-slain'
   | 'two-players-left'
   | 'saint-executed'
   | 'mayor-three-left'

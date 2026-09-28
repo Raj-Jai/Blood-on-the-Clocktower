@@ -12,13 +12,29 @@ import type { CharacterDefinition } from './types.js';
  * to detection abilities (Recluse and Spy) — the engine enforces only the
  * permission; choosing the value stays a Storyteller decision.
  *
- * Night order values were also corrected here:
- *   - The Imp was previously `firstNightOrder: null`, which filtered the Demon
- *     out of the First Night panel entirely — the app told the Storyteller not
- *     to wake the Imp on night one. It is 10, after the Minion info steps
- *     (Poisoner 8, Spy 9), matching the official "Minions first" wake order.
- *   - Poisoner/Spy/Butler/Imp other-night values were re-sequenced to the
- *     official Empath 1 -> Imp 9 order.
+ * NIGHT ORDER, from the official Trouble Brewing night sheet and the official Script
+ * Tool. These are the numbers the engine sorts the wake walk by, and they are also
+ * what the Storyteller's "Night Order" panel displays, so getting them wrong tells
+ * the table to run the night in the wrong order. They were substantially wrong.
+ *
+ * FIRST NIGHT: Minion info, Demon info, then POISONER, Washerwoman, Librarian,
+ * Investigator, Chef, Empath, Fortune Teller, Butler, Spy. The Imp kills last, and
+ * the result is announced at dawn.
+ *
+ *   The Poisoner is the reason the Minions come first: the Storyteller decides what
+ *   may safely be told to a poisoned player BEFORE anyone acts on their ability, so
+ *   the Poisoner has to pick first. This app had the Poisoner 8th of 10 — after every
+ *   information role had already been told the truth — so poisoning someone that night
+ *   did nothing at all. Found by reading the app's own night-order panel during a game.
+ *
+ * OTHER NIGHTS: Poisoner, Monk, Scarlet Woman, Imp, Ravenkeeper, Empath,
+ * Fortune Teller, Butler, Undertaker, Spy. Again the Minion and Demon actions come
+ * first, for the same reason.
+ *
+ *   TPI's own two sources disagree on the last two: the printed night sheet runs
+ *   Butler then Undertaker, the Script Tool runs Undertaker then Butler. The printed
+ *   sheet is followed here because that is the sheet a Storyteller has in front of
+ *   them. The two characters never both have anything to do, so it changes nothing.
  */
 export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
   // Townsfolk
@@ -30,7 +46,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     // "of your choice" matters: without it the engine cannot know which character
     // the player picked, and the official text requires the choice to be theirs.
     ability: 'You start knowing that 1 of 2 players is a particular Townsfolk of your choice.',
-    firstNightOrder: 1,
+    firstNightOrder: 2,
     otherNightOrder: null,
     nightPrompt: 'Choose a player. You will learn which player, and which Townsfolk, 1 of 2 players is.',
     targetCount: 1,
@@ -43,7 +59,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     type: 'townsfolk',
     alignment: 'good',
     ability: 'You start knowing that 1 of 2 players is a particular Outsider. (Or that zero are in play.)',
-    firstNightOrder: 2,
+    firstNightOrder: 3,
     otherNightOrder: null,
     nightPrompt:
       'Choose a player. You will learn which player, and which Outsider, 1 of 2 players is. (It may be that no Outsider is in play.)',
@@ -57,7 +73,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     type: 'townsfolk',
     alignment: 'good',
     ability: 'You start knowing that 1 of 2 players is a particular Minion.',
-    firstNightOrder: 3,
+    firstNightOrder: 4,
     otherNightOrder: null,
     nightPrompt: 'Choose a player. You will learn which player, and which Minion, 1 of 2 players is.',
     targetCount: 1,
@@ -70,7 +86,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     type: 'townsfolk',
     alignment: 'good',
     ability: 'You start knowing how many pairs of evil players there are.',
-    firstNightOrder: 4,
+    firstNightOrder: 5,
     otherNightOrder: null,
     infoType: 'count',
   },
@@ -79,9 +95,9 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     name: 'Empath',
     type: 'townsfolk',
     alignment: 'good',
-    ability: 'Each night, you learn how many of your 2 alive neighbours are evil.',
-    firstNightOrder: 5,
-    otherNightOrder: 1,
+    ability: 'Each night, you learn how many of your 2 alive neighbors are evil.',
+    firstNightOrder: 6,
+    otherNightOrder: 5,
     infoType: 'count',
   },
   {
@@ -91,8 +107,8 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     alignment: 'good',
     ability:
       'Each night, choose 2 players: you learn if either is a Demon. There is a good player that registers as a Demon to you.',
-    firstNightOrder: 6,
-    otherNightOrder: 2,
+    firstNightOrder: 7,
+    otherNightOrder: 6,
     nightPrompt: 'Choose 2 players. You will learn whether either of them is the Demon.',
     targetCount: 2,
     // 'alive' added on top of the spec's 'other': selecting a corpse would
@@ -107,7 +123,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     alignment: 'good',
     ability: 'Each night*, you learn which character died by execution today.',
     firstNightOrder: null,
-    otherNightOrder: 3,
+    otherNightOrder: 8,
     infoType: 'character',
   },
   {
@@ -117,7 +133,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     alignment: 'good',
     ability: 'Each night*, choose a player (not yourself): they are safe from the Demon tonight.',
     firstNightOrder: null,
-    otherNightOrder: 4,
+    otherNightOrder: 2,
     nightPrompt: 'Choose a good player other than yourself. They are safe from the Demon tonight.',
     targetCount: 1,
     targetRestrictions: ['other', 'alive', 'good'],
@@ -130,7 +146,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     alignment: 'good',
     ability: 'If you die at night, you are woken to choose a player: you learn their character.',
     firstNightOrder: null,
-    otherNightOrder: 5,
+    otherNightOrder: 4,
     nightPrompt: 'Choose a player. You learn their character.',
     targetCount: 1,
     targetRestrictions: ['other'],
@@ -193,11 +209,13 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     type: 'outsider',
     alignment: 'good',
     ability: 'Each night, choose a player (not yourself): tomorrow, you may only vote if they are voting too.',
-    firstNightOrder: null,
-    otherNightOrder: 6,
-    nightPrompt: 'Choose a Townsfolk other than yourself. Tomorrow you may only vote if they vote too.',
+    firstNightOrder: 8,
+    otherNightOrder: 7,
+    // Not "a Townsfolk": the rule is that the choice may not be a Minion or the Demon, so
+    // every Outsider is legal. See the `not-demon-or-minion` restriction.
+    nightPrompt: 'Choose a player other than yourself. They may not be a Minion or the Demon. Tomorrow you may only vote if they vote too.',
     targetCount: 1,
-    targetRestrictions: ['other', 'alive', 'townsfolk'],
+    targetRestrictions: ['other', 'alive', 'not-demon-or-minion'],
     infoType: 'none',
   },
   {
@@ -210,7 +228,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     type: 'outsider',
     alignment: 'good',
     ability: 'You do not know you are the Drunk. You think you are a Townsfolk character, but you are not.',
-    firstNightOrder: 7,
+    firstNightOrder: null,
     otherNightOrder: null,
     infoType: 'none',
   },
@@ -243,8 +261,8 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     type: 'minion',
     alignment: 'evil',
     ability: 'Each night, choose a player: they are poisoned tonight and tomorrow day.',
-    firstNightOrder: 8,
-    otherNightOrder: 7,
+    firstNightOrder: 1,
+    otherNightOrder: 1,
     nightPrompt: 'Choose a player. They are poisoned tonight and tomorrow day.',
     targetCount: 1,
     targetRestrictions: ['other', 'alive'],
@@ -258,7 +276,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     ability:
       'Each night, you see the Grimoire. You might register as good & as a Townsfolk or Outsider, even if dead.',
     firstNightOrder: 9,
-    otherNightOrder: 8,
+    otherNightOrder: 9,
     infoType: 'grimoire',
     registerAs: { alignments: ['good', 'evil'], types: ['townsfolk', 'outsider'] },
   },
@@ -295,7 +313,7 @@ export const TROUBLE_BREWING_CHARACTERS: CharacterDefinition[] = [
     ability: 'Each night*, choose a player: they die. If you kill yourself this way, a Minion becomes the Imp.',
     // Was `null`, which removed the Demon from the First Night panel entirely.
     firstNightOrder: 10,
-    otherNightOrder: 9,
+    otherNightOrder: 3,
     nightPrompt: 'Choose a player. They die tonight. (Choosing yourself hands the Demon role to a Minion.)',
     targetCount: 1,
     // Deliberately NOT 'other': "If you kill yourself this way, a Minion becomes

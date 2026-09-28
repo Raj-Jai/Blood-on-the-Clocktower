@@ -6,14 +6,30 @@
   --border-subtle: #34324a;
   --text-primary: #ece7f5;
   --text-muted: #a29cb8;
-  --text-faint: #6f6a85;
+  /*
+   * `.faint` carries EVERY explanatory line in the app — the ability rules note,
+   * "Voting is open", "This nomination did not pass", "Questions can be asked during
+   * the day". It was #6f6a85, which measures 3.51:1 on a panel and 2.79:1 on the gold
+   * tinted action card: the one class that explains what is happening was the one
+   * class nobody could read. This is 5.71:1 on a panel and 5.13:1 on a raised panel.
+   */
+  --text-faint: #938daa;
 
   --accent-gold: #c9a24b;
   --accent-gold-bright: #e6c877;
 
-  --good-blue: #3f7fd6;
+  /*
+   * These two are TEXT colours, and they carry the two most important sentences in
+   * the game: the nominee's name, and "This nomination met the threshold. Execute them
+   * when the table is ready." At their old values they measured 3.43:1 and 3.08:1
+   * against the panels they actually sit on. The border/background values are kept
+   * separately below, because the dark red is right for a 1px border and wrong for a
+   * 16px label.
+   */
+  --good-blue: #5a95e8;
   --good-blue-bg: rgba(63, 127, 214, 0.14);
-  --evil-red: #c23b3b;
+  --evil-red: #e35a5a;
+  --evil-red-border: #c23b3b;
   --evil-red-bg: rgba(194, 59, 59, 0.14);
 
   --danger: #d64545;
@@ -105,9 +121,22 @@ button {
   transform: scale(0.98);
 }
 
+/*
+ * A disabled control is the client telling the player "no", and the app's own rule is
+ * that the client is the thing that has to know. So a disabled control has to be
+ * legibly disabled, not a dim ghost: `opacity: 0.45` composited the label down to
+ * about 3.9:1 and turned the gold gradient to a muddy olive, so a player who could not
+ * see it was told nothing at all. An explicit palette keeps it obviously inert at
+ * 6.17:1.
+ */
 .btn:disabled {
-  opacity: 0.45;
   cursor: not-allowed;
+  opacity: 1;
+  background: var(--bg-panel-raised);
+  color: var(--text-faint);
+  border-color: var(--border-subtle);
+  box-shadow: none;
+  transform: none;
 }
 
 .btn-primary {
@@ -320,10 +349,39 @@ button {
     width: 100%;
   }
 
-  /* Bigger checkbox tap targets for the Storyteller's status toggles. */
-  .grimoire-cards input[type='checkbox'] {
-    width: 18px;
-    height: 18px;
+  /*
+   * Bigger checkbox tap targets. The Storyteller's poisoned/drunk/protected toggles
+   * are how the single most consequential per-player status in the game is
+   * administered, and each one used to be an 18px box in a column of seven — on a
+   * phone, 21 of them. The LABEL is the tap target, not the box, so the whole
+   * "poisoned / drunk / protected" row is now at least 44px tall.
+   */
+  .grimoire-cards input[type='checkbox'],
+  .panel input[type='checkbox'] {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+  }
+
+  .grimoire-cards label {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 8px;
+    font-size: 14px;
+  }
+
+  /*
+   * The seating circle's swap arrows. These carried inline `padding: 2px 6px;
+   * font-size: 11px`, and an inline style always beats a media query, so the mobile
+   * rules never applied and they rendered at 25x23px — two thumb-sized targets per
+   * player, which on a 12-seat table is 24 of them.
+   */
+  .seat-move {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0 10px;
+    font-size: 18px;
   }
 
   .grimoire-table {

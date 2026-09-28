@@ -236,9 +236,10 @@ export function StorytellerScript({
             They have read the dead — start the day
           </button>
         )}
-        {flow.stage === 'day-voting' && flow.executionPending && (
+        {flow.stage === 'day-execution-pending' && flow.executionPending && (
           <button
             className="btn btn-danger"
+            data-testid="confirm-execution"
             onClick={() => {
               if (flow.nominationId) {
                 socket?.emit(ClientEvents.StorytellerConfirmExecution, { nominationId: flow.nominationId });
@@ -248,7 +249,38 @@ export function StorytellerScript({
             Execute {flow.executedPlayerName ?? 'the nominated player'}
           </button>
         )}
-        {flow.stage === 'day-voting' && !flow.executionPending && (
+        {/*
+          The Virgin and the Slayer resolve on their own, with no vote for the table to
+          confirm and no Execute button for the Storyteller to press. Without a line here
+          the table watches a nomination turn into a death for no stated reason, which
+          reads as a bug — and the whole point of both characters is that the reason is
+          public.
+
+          Deliberately NOT part of `deriveStorytellerLine`: that function's contract is
+          that it agrees with the server-computed `flow.announcement`, and the reason for
+          a death is a fact about the last action, not the state of the day. Folding it in
+          would make the spoken line contradict the announcement.
+        */}
+        {flow.immediateExecution && (
+          <div className="panel" data-testid="immediate-execution">
+            <div className="panel-title">
+              {flow.immediateExecution.cause === 'virgin'
+                ? `${flow.immediateExecution.byCharacterName} — executed immediately`
+                : `${flow.immediateExecution.byCharacterName} — the Demon died`}
+            </div>
+            <p>
+              {flow.immediateExecution.cause === 'virgin'
+                ? `${flow.immediateExecution.playerName} was executed the moment they were nominated. No vote was taken.`
+                : `${flow.immediateExecution.playerName} was Slain. No execution was spent.`}
+            </p>
+            <p className="faint">
+              {flow.immediateExecution.cause === 'virgin'
+                ? 'The Virgin survives. Read out that the nominator died instantly.'
+                : 'The Slayer has spent their one shot.'}
+            </p>
+          </div>
+        )}
+        {flow.stage === 'day-voting' && (
           <button
             className="btn btn-inline"
             onClick={() => {

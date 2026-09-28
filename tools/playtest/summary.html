@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fix log — Blood on the Clocktower</title>
+<style>
+  :root { --bg:#0b0b12; --panel:#16151f; --raised:#201f2c; --line:rgba(255,255,255,.1);
+          --text:#eceaf5; --muted:#a8a3bd; --faint:#938daa; --gold:#c9a24b; --red:#e35a5a;
+          --blue:#5a95e8; --green:#5fbf85; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.6 system-ui,-apple-system,Segoe UI,sans-serif; }
+  .wrap { max-width:980px; margin:0 auto; padding:32px 20px 80px; }
+  h1 { font-size:1.9rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 24px; }
+  h2 { font-size:1.15rem; margin:30px 0 12px; padding-bottom:7px; border-bottom:1px solid var(--line); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin:10px 0; }
+  .done { border-left:4px solid var(--green); }
+  .wip  { border-left:4px solid var(--gold); }
+  .todo { border-left:4px solid rgba(255,255,255,.14); }
+  .card h3 { margin:0 0 6px; font-size:1rem; }
+  .pill { display:inline-block; font-size:.68rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+          padding:2px 7px; border-radius:4px; margin-right:8px; }
+  .done .pill { background:rgba(95,191,133,.16); color:var(--green); }
+  .wip  .pill { background:rgba(201,162,75,.16); color:var(--gold); }
+  .todo .pill { background:rgba(255,255,255,.08); color:var(--faint); }
+  p { margin:6px 0; }
+  ul { margin:6px 0 6px 18px; padding:0; }
+  li { margin:3px 0; }
+  .m { color:var(--muted); }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.85em; color:#cfcbe0; }
+  pre { background:#0e0e15; border:1px solid var(--line); border-radius:8px; padding:11px 13px; overflow-x:auto;
+        color:#cfcbe0; font-size:.79rem; margin:9px 0; }
+  .bar { height:8px; background:rgba(255,255,255,.08); border-radius:99px; overflow:hidden; margin:8px 0 3px; }
+  .bar > i { display:block; height:100%; background:var(--green); }
+  table { width:100%; border-collapse:collapse; margin:9px 0; font-size:.88rem; }
+  th,td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--faint); font-weight:600; font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; }
+  .pass { color:var(--green); }
+  .shots { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; margin:12px 0; }
+  figure { margin:0; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:9px; }
+  figure img { width:100%; border-radius:6px; display:block; }
+  figcaption { font-size:.76rem; color:var(--faint); margin-top:7px; }
+  a { color:var(--blue); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔧 Fix log</h1>
+  <p class="sub">Blood on the Clocktower companion app · small wins first, then the big ones · every tier
+     tested and played before moving on</p>
+
+  <div class="card done">
+    <h3><span class="pill">progress</span>all 20 findings closed</h3>
+    <div class="bar"><i style="width:100%"></i></div>
+    <p class="m">Tiers 1–6 are done, tested and played. <strong>The game is playable and the
+      characters work.</strong> Every finding in the original audit is closed; one of them
+      turned out not to be a bug at all.</p>
+  </div>
+
+  <h2>Tier 1 — small wins ✅ <span class="m" style="font-weight:400;font-size:.85rem">276 tests green, played in a real 6-player game</span></h2>
+
+  <div class="card done">
+    <h3><span class="pill">fix</span>Both failing colours now pass WCAG AA</h3>
+    <p>Measured in the browser, not estimated. <code>.faint</code> carries every explanatory line in the app
+      and was the hardest text on every screen.</p>
+    <table>
+      <tr><th>token</th><th>was</th><th>now</th><th>verdict</th></tr>
+      <tr><td><code>--text-faint</code></td><td>3.51:1</td><td>5.71:1</td><td class="pass">PASS</td></tr>
+      <tr><td><code>--good-blue</code></td><td>3.84:1</td><td>5.94:1</td><td class="pass">PASS</td></tr>
+      <tr><td><code>--evil-red</code></td><td>3.08:1</td><td>5.06:1</td><td class="pass">PASS</td></tr>
+    </table>
+    <p class="m">The dark red is kept separately as <code>--evil-red-border</code>, where it was doing the right
+      job as a 1px border all along.</p>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill">fix</span>Disabled buttons are legibly disabled</h3>
+    <p><code>opacity: 0.45</code> composited the label to ~3.9:1 and turned the gold gradient to olive.
+      A disabled control is the app telling a player “no”, and the app's own rule is that the client is the
+      thing that has to know — so an invisible one says nothing.</p>
+    <pre>disabled button now: colour=rgb(147,141,170)  background=rgb(32,31,44)  opacity=1</pre>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill">fix</span>The vote threshold is now correct, and visible as a number</h3>
+    <p>The app told every living player <em>“A simple majority of the living players executes.”</em> The rule is
+      <em>“equals or exceeds half”</em> — a different, stricter rule that disagrees on every even table.
+      <code>ceil(alive/2)</code> and today's best tally are now in the protocol and on screen.</p>
+    <pre>Vote: hands up if you are in.
+3 of the living players is enough to execute. You can change your vote until the Storyteller closes it.
+
+Nomination: Ada   Nominated by Bram
+Votes for execution: 0 of 3 needed
+3 more votes needed.
+
+"simple majority" still on screen: false</pre>
+    <p class="m">The Storyteller's “On the block” panel now states the number too, and the panel explains the
+      tie rule and the “must beat today’s best tally” rule when they are in play.</p>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill">fix</span>Your phone now tells you it's your turn</h3>
+    <p>There were <strong>zero</strong> uses of <code>document.title</code>, <code>Notification</code>,
+      <code>vibrate</code> or any audio in the whole client. The complete set of signals a player got when woken
+      was a border colour and two words changing — so with the phone face-down the Storyteller had to shout
+      their name, which is the ritual this app exists to replace.</p>
+    <pre>player awake   ->  document.title = "⚡ YOU ARE AWAKE — Clocktower"
+                      navigator.vibrate([120, 80, 120])
+vote open on you ->  "🗳 You are being voted on — Clocktower"</pre>
+    <p class="m">Title and vibration deliberately, not a web Notification: browsers reject
+      <code>requestPermission</code> unless it comes from a user gesture, so a real notification needs a
+      separate opt-in switch during onboarding.</p>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill">fix</span>“Mark Dead” asks first</h3>
+    <p>It was a single unconfirmed, irreversible click sitting right next to a checkbox — and the first thing
+      a new Storyteller presses by accident.</p>
+    <pre>one click on "Mark Dead" -> clicked, player still alive
+the card now offers: "Kill Bram?" | "Cancel"</pre>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill">fix</span>Dialogs stop being traps</h3>
+    <p>Five overlays declared <code>aria-modal="true"</code> while trapping nothing. All of them now close on
+      Escape and on a backdrop tap, move focus inside on open, and restore it on close.</p>
+    <pre>More sheet: opens=true  focus moved inside=true  Escape closes it=true</pre>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill">fix</span>Small correctness and layout wins</h3>
+    <ul>
+      <li><strong>Safe area actually works.</strong> <code>viewport-fit=cover</code> was missing, so
+        <code>env(safe-area-inset-bottom)</code> was always 0 and the More button sat under a notched phone's
+        home indicator — the player could not tap the control that opens everything else.</li>
+      <li><strong>Tap targets.</strong> The Grimoire's poison/drunk/protected checkboxes were 18px and the
+        seating arrows were 25×23px because inline styles beat the mobile media query. Now 24px boxes with
+        44px label rows, and 44px arrows.</li>
+      <li><strong>A deleted UI was still being referenced.</strong> The Spy was told
+        “Your Grimoire is on your <em>Character tab</em>” — there are no tabs, that view was removed.</li>
+      <li><strong>The lobby stopped lying.</strong> “Players (5/15)” implies 15 is the target; 5 is the
+        <em>minimum</em>. It now says “Anywhere from 5 to 15 players works.”</li>
+      <li><strong>The join code is readable.</strong> 34px with wide letter-spacing, plus a Copy button — a
+        host reads this out loud across a noisy table.</li>
+      <li><strong>Disabled tells you why.</strong> The night picker used to sit greyed with no explanation; it
+        now says “Pick 1 player first”.</li>
+    </ul>
+  </div>
+
+  <div class="shots">
+    <figure><img src="report-shots/tier1-vote-with-threshold-Bram.png" alt="Player screen with the new disabled styling">
+      <figcaption>Disabled controls are now clearly inert rather than muddy. Readable at a glance in a dark room.</figcaption></figure>
+    <figure><img src="report-shots/tier1-awake-disabled-submit-Ada.png" alt="A player awake with the picker open">
+      <figcaption>Awake, with the submit button saying why it is disabled.</figcaption></figure>
+  </div>
+
+  <h2>Tier 2 — what you learn now reaches you ✅</h2>
+  <div class="card done">
+    <h3><span class="pill">fix</span>The night result is no longer an unreachable branch</h3>
+    <p>This was not a wrong string. It was a <em>state the UI could never be in</em>. The result arrives when
+      the night resolves, at which point the player no longer owes a choice — and
+      <code>showNightPrompt</code> is true only while they do. So the one component that can render a result
+      was unmounted at precisely the moment a result arrived. The Chef and the Empath, who are woken and told
+      and never given a picker, could not see theirs by construction.</p>
+    <p>There is now a <code>night-result</code> moment, in the right order among the three beats a real table
+      has: <strong>an outstanding choice outranks the information, which outranks “done, close your eyes.”</strong></p>
+    <pre>night 1  Empath   "You learn that none of your living neighbours is evil."
+         Butler   "Your choice is noted. Remember it for tomorrow."
+         Imp      "The night passes."
+night 2  Empath   "You learn that none of your living neighbours is evil."   <- fresh, not night 1's
+         Butler   "Your choice is noted. Remember it for tomorrow."</pre>
+    <p class="m">Shown in the moment card at the two beats that matter — the moment the night resolves, and
+      dawn while the table reads the Grimoire — then it yields to the day's instruction and moves to the
+      More sheet, labelled with the night it belongs to. An Empath can check last night's number against
+      tonight's without a stale answer reappearing in tonight's slot.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>The 1-of-2 roles stopped telling a player something false</h3>
+    <p>The moment results became visible, a bug inside them became visible too. The app was appending
+      <em>“The other is the Ravenkeeper.”</em> That is not extra detail, it is a <strong>false statement</strong>
+      about one of the two named players — and the decoy was drawn from characters that really were in play,
+      so it named a genuine role. A player who saw it was being told the truth about the table, in the one
+      piece of information the character exists to give them.</p>
+    <pre>before: "You learn that 1 of 2 players — Ada or Bram — is the Chef.
+         The other is the Ravenkeeper."     <- Bram IS the Ravenkeeper
+after:  "You learn that 1 of 2 players — Ada or Bram — is the Chef."</pre>
+    <p class="m">The decoy is now drawn from characters <em>not</em> in play, which is what the real game does
+      — the second token exists precisely so that showing it gives the player nothing.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>The night runs in the official order</h3>
+    <p>Read straight off the Storyteller's own Night Order panel: the Poisoner was woken <strong>eighth of ten</strong>,
+      after every information role had already been told the truth. So poisoning somebody that night did
+      nothing at all — the poison was applied after the abilities it was meant to disable had already run.</p>
+    <table>
+      <tr><th>Night</th><th>was</th><th>now</th></tr>
+      <tr><td>1</td><td>Washerwoman, Librarian, Investigator, Chef, Empath, FT, <b>Poisoner</b>, Spy, Imp</td><td><b>Poisoner</b>, Washerwoman, Librarian, Investigator, Chef, Empath, FT, Butler, Spy, Imp</td></tr>
+      <tr><td>2+</td><td>Empath, FT, Undertaker, Monk, Ravenkeeper, Butler, <b>Poisoner</b>, Spy, Imp</td><td><b>Poisoner</b>, Monk, Imp, Ravenkeeper, Empath, FT, Butler, Undertaker, Spy</td></tr>
+    </table>
+    <p>The Minions and the Demon go first so the Storyteller can decide what may safely be told before
+      anyone acts on their ability. The Butler also never woke on night one at all — its First Night slot
+      had been <code>null</code>.</p>
+    <p><strong>A test was lying about this.</strong> One was named
+      <em>“returns the official First Night order”</em> and asserted an order that put the Poisoner fifth of
+      seven. A test whose name asserts a rule it does not check is worse than no test: it makes the bug look
+      like a decision. It now asserts the sheet, and a new test states the consequence that actually matters
+      — <em>the Poisoner is woken first, on every night</em>.</p>
+  </div>
+  <div class="shots">
+    <figure><img src="report-shots/v-learn-try1-result-at-dawn-before-the-day-starts-Cleo.png" alt="A player seeing their night result at dawn">
+      <figcaption>What a learn-in character actually sees now, at dawn, while the table reads the Grimoire.</figcaption></figure>
+  </div>
+
+  <h2>Still to come</h2>
+  <h2>Tier 3 — the app can no longer award the win to the wrong team ✅</h2>
+  <div class="card done">
+    <h3><span class="pill">fix</span>“If both teams would win, good wins” was implemented backwards</h3>
+    <p>The living-count check ran <em>first</em>, so it always beat the no-Demon check. Executing the
+      Demon on the last three players announced the wrong winner to a table that had just correctly
+      executed the Demon.</p>
+    <pre>rulebook: "If both teams would win at the same time, good wins. For example, if the
+           Demon dies but that leaves only two players left, the good team wins."
+
+before, 3 alive, Imp executed:  🏆 Evil wins!  Only two players remain.
+after,  3 alive, Imp executed:  🏆 Good wins!  The Demon was executed.</pre>
+    <p class="m">The 2-alive test is <strong>not</strong> dead code and now has a test of its own: it is the
+      ordinary Evil win, firing when a Minion has inherited the Imp and the table thins to two. Good only
+      wins the tie when Good has actually won.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>The Scarlet Woman’s boundary, and a FIXME that would have made it permanent</h3>
+    <p>The character triggers on <strong>five or more alive just before the Demon dies</strong> — which is
+      <em>four or more left alive after</em>, since the count is taken with the Demon already dead. The code
+      demanded five survivors, so it silently skipped the trigger at exactly the boundary the card names.</p>
+    <pre>5 alive, Imp executed  ->  before: 🏆 Good wins!  (Scarlet Woman untouched — Evil handed a win)
+                       ->  after:  Scarlet Woman becomes the Imp, game CONTINUES</pre>
+    <p><strong>The trap here:</strong> the <code>FIXME</code> standing over that line described the symptom
+      correctly and proposed <code>livingPlayerCount &gt;= 5</code> as the fix — which is what the code
+      already did. Anyone who had “fixed” it would have baked the off-by-one in permanently and deleted the
+      note explaining it. It now says what the almanac says and why, with the count’s timing spelled out.</p>
+    <p class="m">Two auditors had concluded this was <em>not</em> a bug, because they tested at 6 alive rather
+      than at the boundary. The boundary case is the only one that matters. There is now a test named after
+      it.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>A Scarlet Woman who inherits the Demon is now told</h3>
+    <p>The Imp self-kill told its heir; the execution path did not. So a Scarlet Woman who became the Demon
+      carried on playing as a Minion — her phone still said Scarlet Woman, she never got an Imp prompt, and
+      the host’s Grimoire still listed her as a Minion. Only a transient banner knew.</p>
+    <pre>grimoire after a takeover: Cleo=Imp, Esme=Imp(dead), Ada=Ravenkeeper, ...</pre>
+    <p class="m">Invisible while the takeover mis-fired below six players. Corrected, it happens in real
+      games — so the heir now gets her updated character and the Grimoire is refreshed.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>Two more tests were asserting the bugs as rules</h3>
+    <p>One was named <em>“prioritizes the two-players-left Evil win over a simultaneous no-Demon Good
+      win”</em> — its name stated the opposite of the rulebook. Another, the night-order one, was named
+      <em>“returns the official First Night order”</em> and asserted an order that was not the official one.
+      Both read as deliberate decisions, which is exactly how a bug survives review. Three tests now assert
+      the rulebook and say which ruling they pin.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">check</span>Three clean nights in the real UI, afterwards</h3>
+    <pre>night 1  1. Poisoner   3. Librarian (no Outsiders in play)  6. Empath   10. Imp
+         Cleo: "Ada is poisoned."
+         Fay:  "You learn that there are no Outsiders in play."
+night 2  1. Poisoner   2. Monk   3. Imp
+night 3  1. Poisoner   2. Monk   3. Imp
+
+skipped wake-ups: 0        problems: none</pre>
+  </div>
+  <h2>Tier 6 — the characters that were not there at all ✅</h2>
+  <div class="card done">
+    <h3><span class="pill">fix</span>Two Townsfolk had no behaviour whatsoever</h3>
+    <p><code>virginTriggersExecution</code> and <code>slayerWouldKill</code> were written, exported
+      from <code>abilities.ts</code>, re-exported from <code>rules.ts</code> — and called by
+      <strong>nothing</strong>. Nominating the Virgin did nothing. Slaying the Demon did nothing.
+      Neither is an edge case: the Virgin and the Slayer are in most Trouble Brewing scripts.</p>
+    <p>Both now resolve the instant their condition is met, with no vote for the table to confirm
+      and no Execute button for the Storyteller to press — because both say <em>immediately</em>.
+      They are announced publicly, and the player who died is told in their own window.</p>
+    <pre>the Virgin, the moment they are nominated:
+
+  host    🔔 Bram has been executed.
+          ┌ Virgin — executed immediately ─────────────┐
+          │ Bram was executed the moment they were     │
+          │ nominated. No vote was taken.               │
+          │ The Virgin survives. Read out that the     │
+          │ nominator died instantly.                   │
+          └─────────────────────────────────────────────┘
+
+  table   Bram is dead. The Virgin is still alive. Nobody
+          was put to the vote, and there was nothing to vote on.</pre>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>Wiring the Slayer up exposed a much worse bug</h3>
+    <p>The moment <code>slayerWouldKill</code> went live, <strong>any player who successfully
+      nominated the Demon killed them instead of being executed.</strong> The predicate checked that
+      the “Slayer” was alive, that the ability was unused, and that the target registered as the
+      Demon — and never that the player doing the nominating <em>was</em> the Slayer.</p>
+    <p>It had been invisible for the whole life of the app precisely <strong>because it was never
+      called</strong>. Dead code does not fail; it just sits there looking correct. The existing
+      end-game tests caught it on the first run, and there is now a test named after it.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>Two rules that are not the same kind of death</h3>
+    <p>Easy to write as one feature, and wrong. The Virgin's text is <em>“they are executed
+      immediately”</em>, so it <strong>is</strong> an execution: it spends the day's one execution,
+      the Undertaker learns the victim, and a Saint nominator loses the game for Good on the spot.
+      The Slayer's kill is a character ability, not a town execution, so it does none of those — a
+      Recluse registering as the Demon can be Slain, and that is not a Demon death at all.</p>
+    <p>Both now run through one <code>applyExecution</code>. Two copies of that bookkeeping is how
+      the Undertaker and the Mayor end up disagreeing about the same day.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>A poisoned Soldier survived the Imp, and a poisoned Spy got the whole Grimoire</h3>
+    <p>Two poison interactions, both one line, both of which a table hits on night one.</p>
+    <pre>The almanac's own example, now true:
+
+  The Poisoner poisons the Soldier, then the Imp attacks
+  the Soldier. The Soldier dies, because they have no
+  ability while poisoned.
+
+And the Spy: poisoning the Spy is the Poisoner's obvious first
+move at that seat, and the case never consulted `abilityWorks`
+like every other ability did — so a poisoned Spy was handed the
+entire Grimoire every single night. The largest information
+leak in the game.</pre>
+    <p>The Monk is deliberately unaffected, and the asymmetry is the point: the Soldier's safety is
+      an ability permanently in force, so it stops working when the character does; the Monk's is an
+      action already taken, so there is nothing for poison to undo.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>The Ravenkeeper woke forever, and the Butler could not choose an Outsider</h3>
+    <p><strong>The Ravenkeeper.</strong> “If you die <em>at night</em>, you are woken to choose a
+      player.” The night order added <em>every dead Ravenkeeper</em> to <em>every night</em>, with no
+      condition — so one who died at night was woken again every night after, and one who was
+      <strong>executed by the town</strong> was woken too, which never happens in the real game. A
+      Ravenkeeper executed on day 1 got a free look at a character every night for the rest of the
+      game.</p>
+    <p>Fixing this was the one place the obvious fix was wrong. The step has to be visible in
+      <code>buildNightOrder</code>, because <code>isNightFinished</code> and the Storyteller's
+      outstanding list both enumerate it — a deferred step the order cannot see is a night that never
+      finishes. So the condition is a flag, <code>ravenkeeperWakePending</code>, that distinguishes
+      died-at-night-and-unwoken from executed and from already-woken. My first attempt added the
+      condition backwards and the existing test caught it.</p>
+    <p><strong>The Butler.</strong> The data said the choice had to be a Townsfolk, which rules out
+      the Saint, the Recluse, the Drunk and the Ravenkeeper — every Outsider in the script. The rule
+      is only that the choice may not be a Minion or the Demon. It is now a
+      <code>not-demon-or-minion</code> restriction reading the <em>true</em> character type, because
+      the obvious <code>good</code> restriction reads perceived alignment and would have excluded a
+      Recluse registering as Evil.</p>
+  </div>
+  <div class="shots">
+    <figure><img src="report-shots/virgin-tier6-virgin-Esme-ST.png" alt="The Storyteller's screen: Bram has been executed by the Virgin">
+      <figcaption>Real browser, real click. The nomination resolved into a death the moment it was made, and the host is told why.</figcaption></figure>
+  </div>
+  <h2>Tier 5 — the game is playable ✅</h2>
+  <div class="card done">
+    <h3><span class="pill">fix</span>The execution is finally reachable</h3>
+    <p>This was the one that made the whole app unplayable. The Execute button was gated on
+      <code>stage === 'day-voting' && executionPending</code>, and those two could never both be
+      true: the flow only reaches <code>day-voting</code> while a nomination is <em>open</em>, and
+      <code>executionPending</code> is only ever set by the act of <em>closing</em> one. The game
+      shipped with no execution mechanic at all.</p>
+    <p>“Closed, qualifying, awaiting execution” now has a name — the
+      <code>day-execution-pending</code> stage — instead of being expressed as the absence of a stage.</p>
+    <pre>the host's screen, the moment the vote passes:
+
+  SAY   "Cleo is executed."
+  What to do now:  [ 🔊 Say it again ]  [ Execute Cleo ]
+
+the nominee's screen:
+  👁 You have been nominated, and the vote passed.
+    You are about to be executed. Nothing on this screen changes
+    that — remember who voted.
+
+everyone else:
+  💬 Cleo is about to be executed.
+    The vote passed. Nobody may nominate until the Storyteller confirms it.</pre>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>A pending execution now survives a later nomination</h3>
+    <p>My first attempt at this was to <strong>refuse new nominations</strong> while an execution was
+      pending. That was wrong, and my own tests caught it: the rules compare the day's tallies and
+      the tie rule says to “call again for nominations”, so a day <em>must</em> be able to hold
+      several passed votes. The guard would have silently removed a legal move.</p>
+    <p>The real problem was that the pending execution lived on whichever nomination object
+      happened to be current, so a new nomination replaced it and the execution vanished. It is
+      now a day-scoped fact on the session, addressed by its own id — so a later nomination can
+      neither destroy it nor be confused for it.</p>
+    <pre>A gets 5  ->  pending
+B gets 4  ->  not qualified, A is still pending
+            ->  A can still be executed even though it is no
+               longer the most recent nomination
+A ties B   ->  neither executed, and A comes off the block</pre>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>A nominee is told they are about to die</h3>
+    <p>Being nominated is the most public moment of the day and the app said nothing about it. Once
+      a vote passed, every player's screen went back to “Talk it over. Nominate if you have a
+      reason”, and the nominee was handed a <strong>live Nominate button</strong> that the server would
+      have accepted — destroying the pending execution. They now get their own moment, and the
+      control is gone.</p>
+  </div>
+  <div class="shots">
+    <figure><img src="report-shots/tier5b-n1-day-executed-Ada.png" alt="A player's screen: execution banner and Good wins">
+      <figcaption>A completed game, on a phone. The executed player is named, and the right team wins.</figcaption></figure>
+  </div>
+  <h2>Tier 4 — the day’s rules, and the fix that was quietly not shipping ✅</h2>
+  <div class="card done">
+    <h3><span class="pill">fix</span>“More votes than any other nomination today” now exists</h3>
+    <p>The rule has three conditions and the app implemented two. It tested only for an exact
+      <strong>tie</strong>, so the descending ladder a real day produces — five hands, then
+      four — flagged <em>both</em> as qualifying, and the player with <em>fewer</em> votes was
+      the one the app offered to execute.</p>
+    <pre>rulebook: "The vote succeeds if the nominated player got more votes than any other
+         nominated player today, AND the number of votes equals or exceeds half the number
+         of alive players."
+
+was:  A gets 5  ->  pending execution
+      B gets 4  ->  pending execution      <- fewer votes, also queued
+now:  A gets 5  ->  pending execution
+      B gets 4  ->  not qualified</pre>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>A tie now raises the bar instead of erasing it</h3>
+    <p>On a tie the app <em>deleted</em> the earlier record, throwing away the floor the rules say
+      must persist. Two players tied at four and both walked — and then a third nomination with
+      the same four executed, which is the most natural thing a table could do next.</p>
+    <pre>now:  A ties B at 4  ->  neither is executed, and 4 stays as the day's bar
+      a third nomination with 4  ->  still not qualified
+      a fourth with 5           ->  qualified</pre>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>“An execution happened today” is now a fact, not a guess</h3>
+    <p>Three separate rules read the same thing — “did anybody die by execution today” — and all
+      three got it by inspecting the day's vote list. But <code>confirmExecution</code> deleted
+      that list at the moment it executed, so the evidence was always gone by the time anything
+      asked.</p>
+    <ul>
+      <li><strong>The Mayor could win after an execution</strong> — the clause it exists for could never be false.</li>
+      <li><strong>Nothing stopped a second execution in one day.</strong></li>
+      <li><strong>The Undertaker was always told “nobody died by execution today”</strong> — every single night, after every single execution.</li>
+    </ul>
+    <p>It is stored now. The Undertaker also learns the <strong>registered</strong> character, per
+      the almanac: an executed Spy who registers as the Butler is shown the Butler.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>The Mayor’s win moved from dawn to dusk</h3>
+    <p>It was checked at dawn, immediately after the day’s state was reset — so “no execution
+      today” was true <em>by construction</em>. It was also checked after <em>every closed vote</em>,
+      which could end the game mid-discussion with three players still talking.</p>
+    <p class="m">The almanac is explicit that it is a dusk condition, and that is the only place it is
+      checked now — before anything is reset, so the day being judged still has its evidence.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>A player can be nominated only once a day — and is told so</h3>
+    <p>The nominator's half was enforced; the nominee's half was not enforced anywhere. Now it is,
+      and the client stops offering the control, because <strong>a control the server would refuse is
+      a bug even when the server refuses it correctly.</strong></p>
+    <pre>choosing an already-nominated player:
+  select disabled, Nominate disabled, and the panel says
+  "Fay has already been nominated today, so they cannot be nominated again."</pre>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>A dead player stops being offered a vote they have spent</h3>
+    <p>“Each dead player may vote for only one player <strong>throughout the rest of the game</strong>.”
+      The server always enforced it and nothing reached the client, so a ghost was told
+      “you have one vote left” and handed a live button, on every nomination, forever. The fact is
+      in the lobby payload now, and the moment says <em>“your vote is spent”</em> instead.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">fix</span>Nominations and votes are refused outside the day</h3>
+    <p>The server never checked the phase, so a vote could be opened <em>at night</em> — where the flow
+      reports “night-briefing” and no close-the-vote control can ever be rendered, so it sat open
+      until dawn silently discarded it. The client hid the control, so only a test could reach the
+      gap: and the integration test did exactly that, nominating straight after distribution.</p>
+  </div>
+  <div class="card done">
+    <h3><span class="pill">warn</span>A build failure I nearly shipped to you</h3>
+    <p>While fixing the Undertaker I added a helper that used a type I had not imported. The
+      <strong>server build then failed</strong> — and the old server process kept answering on
+      <code>:3001</code>, so the restart script reported “server up (fresh build)” and a whole
+      verification cycle ran against <strong>stale code</strong>. The symptom looked exactly like the
+      fix not working.</p>
+    <p>Two things changed because of it: the restart script no longer silences the build and now
+      refuses to start if <code>:3001</code> is still held, and it reports the PID it started. Unit
+      tests were never at risk — they run from source — but every <em>browser</em> check was.</p>
+  </div>
+  <div class="card todo">
+    <h3><span class="pill">queued</span>Remaining rules work</h3>
+    <ul>
+      <li><strong>“Good wins ties” is inverted</strong> — with the Imp dying at 2 alive the app says
+        <em>Evil wins</em>. The rulebook: “If both teams would win at the same time, good wins.”</li>
+      <li><strong>Scarlet Woman boundary off by one</strong> — at 5 alive the takeover does not fire and Good
+        wins a game Evil did not win. The existing FIXME would make this permanent; flagged before anyone
+        “fixes” it.</li>
+    </ul>
+  </div>
+  <div class="card todo">
+    <h3><span class="pill">queued</span>Vote resolution and the day's rules</h3>
+    <ul>
+      <li>“More votes than any other nomination today” is not implemented — a real day is a descending ladder.</li>
+      <li>A tie deletes the floor instead of raising it, so a third tied nomination executes.</li>
+      <li>Two executions in one day are possible.</li>
+      <li>Mayor checked at dawn instead of dusk, and can win <em>after</em> an execution.</li>
+      <li>A player can be nominated repeatedly in one day.</li>
+      <li>Nominations and votes accepted during the night phase.</li>
+      <li>A dead player is never told they have a vote, and the app cannot know whether to offer it.</li>
+    </ul>
+  </div>
+  <div class="card todo">
+    <h3><span class="pill">queued</span>Character bugs</h3>
+    <ul>
+      <li>Poisoner acts after every information role, so poisoning someone that night does nothing.</li>
+      <li>Virgin and Slayer have no implementation at all — dealt to players, cannot be used.</li>
+      <li>Undertaker is always told nobody died by execution. Ravenkeeper wakes on later nights and after a
+        daytime death. A poisoned Soldier survives the Imp.</li>
+      <li>The 1-of-2 roles name a second, sometimes false, character. The Fortune Teller's red herring is
+        inert while the log claims it works.</li>
+      <li>5- and 6-player tables leak every Evil player's exact role to every other Evil player.</li>
+    </ul>
+  </div>
+  <div class="card todo">
+    <h3><span class="pill">last</span>Making the execution reachable</h3>
+    <p class="m">Deliberately last. Restoring the button <em>before</em> the vote-resolution and
+      one-execution-per-day fixes would ship a game that executes the wrong player, twice in a day. When it
+      lands, nomination also has to be locked while an execution is pending — today a player can overwrite a
+      pending execution and lose it.</p>
+  </div>
+
+  <h2>Reproduce</h2>
+  <pre>node tools/playtest/tier1.mjs          # measures everything in this page
+node tools/playtest/smoke.mjs
+node tools/playtest/verify.mjs
+PLAYERS=5 NIGHTS=2 node tools/playtest/play-game.mjs</pre>
+  <p class="m">Full original write-up in <a href="../../PLAYTEST.md">PLAYTEST.md</a> ·
+     harness rules in <a href="README.md">tools/playtest/README.md</a></p>
+</div>
+</body>
+</html>
