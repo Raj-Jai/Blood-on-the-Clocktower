@@ -20,6 +20,9 @@ export const ClientEvents = {
   StorytellerEndGame: 'storyteller:endGame',
   ChatEvilSend: 'chat:evil:send',
   ChatOpenSend: 'chat:open:send',
+  PlayerSubmitNightAction: 'player:submitNightAction',
+  StorytellerAdvanceNightStep: 'storyteller:advanceNightStep',
+  StorytellerSetDiscretionOverride: 'storyteller:setDiscretionOverride',
 } as const;
 
 /** Server -> Client event names. */
@@ -42,6 +45,10 @@ export const ServerEvents = {
   StorytellerConnectionStatus: 'storyteller:connectionStatus',
   GameEnded: 'game:ended',
   DemonInherited: 'demon:inherited',
+  NightRosterUpdate: 'night:rosterUpdate',
+  NightPrompt: 'night:prompt',
+  NightInfoResult: 'night:infoResult',
+  DiscretionLogUpdate: 'discretion:logUpdate',
   Error: 'error',
 } as const;
 

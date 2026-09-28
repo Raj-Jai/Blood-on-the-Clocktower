@@ -51,7 +51,18 @@ export function buildGrimoire(session: GameSession): GrimoirePlayerEntry[] {
 }
 
 export function broadcastGrimoire(io: SocketIOServer, session: GameSession): void {
-  sendToStoryteller(io, session, ServerEvents.GrimoireUpdate, { grimoire: buildGrimoire(session) });
+  const grimoire = buildGrimoire(session);
+  sendToStoryteller(io, session, ServerEvents.GrimoireUpdate, { grimoire });
+  // The Spy's ability is "Each night, you see the Grimoire" -- they get the
+  // exact same view as the Storyteller, live, for as long as they're alive
+  // (the ability continues working "even if dead" for registration
+  // purposes, but seeing the Grimoire itself is not one of the "even if
+  // dead" clauses, so it stops once the Spy dies).
+  for (const player of session.players.values()) {
+    if (player.alive && player.character === 'spy') {
+      sendToPlayer(io, player, ServerEvents.GrimoireUpdate, { grimoire });
+    }
+  }
 }
 
 export function broadcastLobby(io: SocketIOServer, session: GameSession): void {

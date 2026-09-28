@@ -76,4 +76,13 @@ export const Errors = {
       "That seat disconnected moments ago and may just be reconnecting on its own. Please wait a bit and try again.",
       409
     ),
+  notNightPhase: () => new ClocktowerError('NOT_NIGHT_PHASE', 'Night actions can only be submitted during the night.', 400),
+  notYourNightAction: () =>
+    new ClocktowerError('NOT_YOUR_NIGHT_ACTION', "It isn't your turn to act tonight.", 403),
+  invalidNightTarget: () =>
+    new ClocktowerError('INVALID_NIGHT_TARGET', 'That player is not a legal target for this ability.', 422),
+  wrongTargetCount: (expected: number) =>
+    new ClocktowerError('WRONG_TARGET_COUNT', `This ability needs exactly ${expected} target(s).`, 422),
+  nightActionAlreadySubmitted: () =>
+    new ClocktowerError('NIGHT_ACTION_ALREADY_SUBMITTED', 'You already submitted your action for tonight.', 403),
 };

@@ -123,3 +123,83 @@ describe('useSession nomination state', () => {
     expect(result.current.lobbyPlayers.find((p) => p.playerId === 'p1')?.hasNominatedToday).toBe(false);
   });
 });
+
+describe('useSession night engine state', () => {
+  it('sets nightRoster from NightRosterUpdate', () => {
+    const socket = createFakeSocket();
+    const { result } = renderHook(() => useSession(socket));
+
+    act(() =>
+      socket.fire(ServerEvents.NightRosterUpdate, {
+        isFirstNight: true,
+        steps: [{ playerId: 'p0', characterId: 'poisoner', characterName: 'Poisoner', automationClass: 'assisted', done: false, current: true }],
+      })
+    );
+
+    expect(result.current.nightRoster?.isFirstNight).toBe(true);
+    expect(result.current.nightRoster?.steps).toHaveLength(1);
+  });
+
+  it('sets nightPrompt from NightPrompt, and clears it once NightInfoResult arrives', () => {
+    const socket = createFakeSocket();
+    const { result } = renderHook(() => useSession(socket));
+
+    act(() =>
+      socket.fire(ServerEvents.NightPrompt, {
+        characterId: 'monk',
+        characterName: 'Monk',
+        prompt: 'Choose a player to protect.',
+        targetCount: 1,
+        eligibleTargetIds: ['p1', 'p2'],
+      })
+    );
+    expect(result.current.nightPrompt?.characterId).toBe('monk');
+
+    act(() => socket.fire(ServerEvents.NightInfoResult, { characterId: 'empath', text: '1 of your 2 neighbours is evil.' }));
+    expect(result.current.nightPrompt).toBeNull();
+    expect(result.current.nightInfoResult?.text).toBe('1 of your 2 neighbours is evil.');
+  });
+
+  it('clears nightRoster and nightPrompt when leaving the night phase, but not when staying in it', () => {
+    const socket = createFakeSocket();
+    const { result } = renderHook(() => useSession(socket));
+
+    act(() =>
+      socket.fire(ServerEvents.NightRosterUpdate, { isFirstNight: true, steps: [] })
+    );
+    act(() =>
+      socket.fire(ServerEvents.NightPrompt, {
+        characterId: 'monk',
+        characterName: 'Monk',
+        prompt: 'Choose a player.',
+        targetCount: 1,
+        eligibleTargetIds: [],
+      })
+    );
+
+    // Staying in night (e.g. a redundant phase-changed emit) must not wipe it.
+    act(() => socket.fire(ServerEvents.GamePhaseChanged, { phase: 'night', dayNumber: 1, phaseEndsAt: null }));
+    expect(result.current.nightRoster).not.toBeNull();
+    expect(result.current.nightPrompt).not.toBeNull();
+
+    act(() => socket.fire(ServerEvents.GamePhaseChanged, { phase: 'day', dayNumber: 2, phaseEndsAt: null }));
+    expect(result.current.nightRoster).toBeNull();
+    expect(result.current.nightPrompt).toBeNull();
+  });
+
+  it('sets discretionLog from DiscretionLogUpdate', () => {
+    const socket = createFakeSocket();
+    const { result } = renderHook(() => useSession(socket));
+
+    act(() =>
+      socket.fire(ServerEvents.DiscretionLogUpdate, {
+        entries: [
+          { kind: 'drunk-cover', playerId: 'p0', playerDisplayName: 'Alice', valueLabel: 'Chef', isOverride: false, at: 123 },
+        ],
+      })
+    );
+
+    expect(result.current.discretionLog).toHaveLength(1);
+    expect(result.current.discretionLog[0]?.valueLabel).toBe('Chef');
+  });
+});

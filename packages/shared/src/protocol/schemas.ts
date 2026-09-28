@@ -78,6 +78,16 @@ export const EndGameSchema = z.object({
   winner: z.enum(['good', 'evil']),
 });
 
+export const SubmitNightActionSchema = z.object({
+  targetPlayerIds: z.array(z.string().min(1)).max(2),
+});
+
+export const SetDiscretionOverrideSchema = z.object({
+  kind: z.enum(['drunk-cover', 'fortune-teller-red-herring']),
+  playerId: z.string().min(1),
+  value: z.string().min(1),
+});
+
 export const CreateSessionRequestSchema = z.object({});
 
 export const JoinSessionRequestSchema = z.object({

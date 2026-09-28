@@ -4,11 +4,15 @@ import {
   ServerEvents,
   type ActiveNominationView,
   type DemonInheritedPayload,
+  type DiscretionLogEntryView,
   type DistributionPayload,
   type ErrorPayload,
   type GameEndedPayload,
   type GamePhase,
   type GrimoirePlayerEntry,
+  type NightInfoResultPayload,
+  type NightPromptPayload,
+  type NightRosterPayload,
   type QuestionEntryView,
 } from '@clocktower/shared';
 
@@ -51,6 +55,14 @@ export interface SessionState {
   gameResult: GameEndedPayload | null;
   /** Storyteller-only: set when a Minion secretly inherits the Demon role (e.g. after an Imp self-kill). */
   demonInherited: DemonInheritedPayload | null;
+  /** Storyteller-only: the live, steppable night roster. Null outside the night phase. */
+  nightRoster: NightRosterPayload | null;
+  /** Set on the waking player's own client when it's their turn to act tonight. Cleared once they submit or the step advances past them. */
+  nightPrompt: NightPromptPayload | null;
+  /** The most recent night-info result delivered to this player (e.g. Empath's count), kept visible until the next one arrives. */
+  nightInfoResult: NightInfoResultPayload | null;
+  /** Storyteller-only: the auditable log of discretionary hidden-state defaults/overrides. */
+  discretionLog: DiscretionLogEntryView[];
 }
 
 const initialState: SessionState = {
@@ -73,6 +85,10 @@ const initialState: SessionState = {
   questionQueue: [],
   gameResult: null,
   demonInherited: null,
+  nightRoster: null,
+  nightPrompt: null,
+  nightInfoResult: null,
+  discretionLog: [],
 };
 
 export function useSession(socket: Socket | null): SessionState {
@@ -114,6 +130,8 @@ export function useSession(socket: Socket | null): SessionState {
         dayNumber: payload.dayNumber,
         phaseEndsAt: payload.phaseEndsAt,
         nomination: null,
+        nightRoster: payload.phase === 'night' ? s.nightRoster : null,
+        nightPrompt: payload.phase === 'night' ? s.nightPrompt : null,
       }));
     };
     const onGrimoireUpdate = (payload: { grimoire: GrimoirePlayerEntry[] }) => {
@@ -165,6 +183,18 @@ export function useSession(socket: Socket | null): SessionState {
     const onDemonInherited = (payload: DemonInheritedPayload) => {
       setState((s) => ({ ...s, demonInherited: payload }));
     };
+    const onNightRosterUpdate = (payload: NightRosterPayload) => {
+      setState((s) => ({ ...s, nightRoster: payload }));
+    };
+    const onNightPrompt = (payload: NightPromptPayload) => {
+      setState((s) => ({ ...s, nightPrompt: payload }));
+    };
+    const onNightInfoResult = (payload: NightInfoResultPayload) => {
+      setState((s) => ({ ...s, nightInfoResult: payload, nightPrompt: null }));
+    };
+    const onDiscretionLogUpdate = (payload: { entries: DiscretionLogEntryView[] }) => {
+      setState((s) => ({ ...s, discretionLog: payload.entries }));
+    };
 
     socket.on(ServerEvents.AuthOk, onAuthOk);
     socket.on(ServerEvents.LobbyUpdate, onLobbyUpdate);
@@ -185,6 +215,10 @@ export function useSession(socket: Socket | null): SessionState {
     socket.on(ServerEvents.QuestionQueueUpdate, onQuestionQueueUpdate);
     socket.on(ServerEvents.GameEnded, onGameEnded);
     socket.on(ServerEvents.DemonInherited, onDemonInherited);
+    socket.on(ServerEvents.NightRosterUpdate, onNightRosterUpdate);
+    socket.on(ServerEvents.NightPrompt, onNightPrompt);
+    socket.on(ServerEvents.NightInfoResult, onNightInfoResult);
+    socket.on(ServerEvents.DiscretionLogUpdate, onDiscretionLogUpdate);
 
     return () => {
       socket.off(ServerEvents.AuthOk, onAuthOk);
@@ -206,6 +240,10 @@ export function useSession(socket: Socket | null): SessionState {
       socket.off(ServerEvents.QuestionQueueUpdate, onQuestionQueueUpdate);
       socket.off(ServerEvents.GameEnded, onGameEnded);
       socket.off(ServerEvents.DemonInherited, onDemonInherited);
+      socket.off(ServerEvents.NightRosterUpdate, onNightRosterUpdate);
+      socket.off(ServerEvents.NightPrompt, onNightPrompt);
+      socket.off(ServerEvents.NightInfoResult, onNightInfoResult);
+      socket.off(ServerEvents.DiscretionLogUpdate, onDiscretionLogUpdate);
     };
   }, [socket]);
 

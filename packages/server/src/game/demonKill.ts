@@ -4,6 +4,8 @@ import { Errors } from '../errors.js';
 
 export interface DemonKillResult {
   targetPlayerId: string;
+  /** False if the target was protected (Monk/Soldier) and survived -- the kill did not happen. */
+  died: boolean;
   /** Set only when the Demon killed itself and a Minion inherited the role. */
   inheritance: { previousDemonPlayerId: string; newDemonPlayerId: string; newDemonCharacterId: string } | null;
 }
@@ -42,16 +44,24 @@ export function resolveDemonKill(session: GameSession, killerId: string, targetP
   if (!killer.alive || killer.characterType !== 'demon') throw Errors.notTheDemon();
   if (!target.alive) throw Errors.targetDead();
 
+  // The Monk's night protection and the Soldier's passive immunity both
+  // block the Demon's kill outright -- the target simply survives, with no
+  // death and no self-kill/inheritance side effects.
+  if (target.statusEffects.protected || target.character === 'soldier') {
+    return { targetPlayerId, died: false, inheritance: null };
+  }
+
   target.alive = false;
+  target.diedAtNightPending = true;
 
   if (targetPlayerId !== killerId) {
-    return { targetPlayerId, inheritance: null };
+    return { targetPlayerId, died: true, inheritance: null };
   }
 
   // Self-kill: try to hand the Demon role to a random living Minion.
   const candidates = livingMinions(session, killerId);
   if (candidates.length === 0) {
-    return { targetPlayerId, inheritance: null };
+    return { targetPlayerId, died: true, inheritance: null };
   }
 
   const [heir] = shuffle(candidates);
@@ -62,6 +72,7 @@ export function resolveDemonKill(session: GameSession, killerId: string, targetP
 
   return {
     targetPlayerId,
+    died: true,
     inheritance: {
       previousDemonPlayerId: killerId,
       newDemonPlayerId: heir!.playerId,

@@ -30,7 +30,7 @@ describe('resolveDemonKill', () => {
 
     const result = resolveDemonKill(session, demon.playerId, victim.playerId);
 
-    expect(result).toEqual({ targetPlayerId: victim.playerId, inheritance: null });
+    expect(result).toEqual({ targetPlayerId: victim.playerId, died: true, inheritance: null });
     expect(victim.alive).toBe(false);
     expect(demon.alive).toBe(true);
     // The killer's own character is untouched by a kill of someone else.
@@ -100,7 +100,7 @@ describe('resolveDemonKill', () => {
 
     const result = resolveDemonKill(session, demon.playerId, demon.playerId);
 
-    expect(result).toEqual({ targetPlayerId: demon.playerId, inheritance: null });
+    expect(result).toEqual({ targetPlayerId: demon.playerId, died: true, inheritance: null });
     expect(demon.alive).toBe(false);
   });
 
@@ -128,6 +128,52 @@ describe('resolveDemonKill', () => {
     setCharacter(players[2]!, 'outsider', 'recluse');
 
     expect(() => resolveDemonKill(session, notDemon.playerId, victim.playerId)).toThrow();
+  });
+
+  it('a Monk-protected target survives the kill entirely -- no death, no side effects', () => {
+    const { session, players } = makeSession(4);
+    const demon = players[0]!;
+    const protectedTarget = players[1]!;
+    setCharacter(demon, 'demon', 'imp');
+    setCharacter(protectedTarget, 'townsfolk', 'chef');
+    protectedTarget.statusEffects.protected = true;
+    setCharacter(players[2]!, 'minion', 'poisoner');
+    setCharacter(players[3]!, 'townsfolk', 'chef');
+
+    const result = resolveDemonKill(session, demon.playerId, protectedTarget.playerId);
+
+    expect(result).toEqual({ targetPlayerId: protectedTarget.playerId, died: false, inheritance: null });
+    expect(protectedTarget.alive).toBe(true);
+    expect(protectedTarget.diedAtNightPending).toBe(false);
+  });
+
+  it('the Soldier is passively immune to the Demon, independent of the protected status flag', () => {
+    const { session, players } = makeSession(4);
+    const demon = players[0]!;
+    const soldier = players[1]!;
+    setCharacter(demon, 'demon', 'imp');
+    setCharacter(soldier, 'townsfolk', 'soldier');
+    setCharacter(players[2]!, 'minion', 'poisoner');
+    setCharacter(players[3]!, 'townsfolk', 'chef');
+
+    const result = resolveDemonKill(session, demon.playerId, soldier.playerId);
+
+    expect(result.died).toBe(false);
+    expect(soldier.alive).toBe(true);
+  });
+
+  it('sets diedAtNightPending on an unprotected kill, to gate the Ravenkeeper wake', () => {
+    const { session, players } = makeSession(4);
+    const demon = players[0]!;
+    const victim = players[1]!;
+    setCharacter(demon, 'demon', 'imp');
+    setCharacter(victim, 'townsfolk', 'ravenkeeper');
+    setCharacter(players[2]!, 'minion', 'poisoner');
+    setCharacter(players[3]!, 'townsfolk', 'chef');
+
+    resolveDemonKill(session, demon.playerId, victim.playerId);
+
+    expect(victim.diedAtNightPending).toBe(true);
   });
 
   it('throws if the target is already dead', () => {

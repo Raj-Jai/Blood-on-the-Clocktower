@@ -28,6 +28,37 @@ describe('Trouble Brewing character roster', () => {
       }
     }
   });
+
+  it('the Imp wakes on the first night (to learn its Minions) even though its kill is Night 2+', () => {
+    const imp = TROUBLE_BREWING_CHARACTERS.find((c) => c.id === 'imp')!;
+    expect(imp.firstNightOrder).not.toBeNull();
+    expect(imp.wakesOnFirstNight).toBe(true);
+    expect(imp.otherNightOrder).not.toBeNull();
+  });
+
+  it('every character with a night wake (either order slot) has an automationClass', () => {
+    for (const c of TROUBLE_BREWING_CHARACTERS) {
+      const wakes = c.firstNightOrder !== null || c.otherNightOrder !== null;
+      if (wakes) {
+        expect(c.automationClass, `${c.name} wakes but has no automationClass`).toBeDefined();
+      }
+    }
+  });
+
+  it('every assisted or auto character with a targetCount also declares targetRestrictions', () => {
+    for (const c of TROUBLE_BREWING_CHARACTERS) {
+      if (c.automationClass === 'assisted' && (c.targetCount ?? 0) > 0) {
+        expect(c.targetRestrictions, `${c.name} has a targetCount but no targetRestrictions`).toBeDefined();
+      }
+    }
+  });
+
+  it('Drunk and Recluse are classified manual (the two irreducible roles per the automation research)', () => {
+    const drunk = TROUBLE_BREWING_CHARACTERS.find((c) => c.id === 'drunk')!;
+    const recluse = TROUBLE_BREWING_CHARACTERS.find((c) => c.id === 'recluse')!;
+    expect(drunk.automationClass).toBe('manual');
+    expect(recluse.automationClass).toBe('manual');
+  });
 });
 
 describe('Distribution table', () => {

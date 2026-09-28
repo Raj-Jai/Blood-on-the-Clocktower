@@ -14,6 +14,19 @@ async function waitFor<T = unknown>(socket: ClientSocket, event: string): Promis
   });
 }
 
+/** Waits for the first occurrence of `event` on `socket` whose payload satisfies `predicate`, ignoring earlier (stale) emissions of the same event that may still be in flight from unrelated setup broadcasts. */
+async function waitForMatching<T = unknown>(socket: ClientSocket, event: string, predicate: (payload: T) => boolean): Promise<T> {
+  return new Promise((resolve) => {
+    const handler = (payload: T) => {
+      if (predicate(payload)) {
+        socket.off(event, handler);
+        resolve(payload);
+      }
+    };
+    socket.on(event, handler);
+  });
+}
+
 describe('nomination flow: multiple nominations per day (regression for #4)', () => {
   let httpServer: ReturnType<typeof createServer>;
   let io: SocketIOServer;
@@ -137,7 +150,13 @@ describe('nomination flow: multiple nominations per day (regression for #4)', ()
   it('broadcasts hasNominatedToday via the lobby so clients can show a specific reason', async () => {
     const { stSocket, playerSockets, players } = await setUpGame(5);
 
-    const lobbyPromise = waitFor<any>(stSocket, ServerEvents.LobbyUpdate);
+    // Setup itself triggers earlier LobbyUpdate broadcasts (one per player
+    // joining/authenticating); wait specifically for the one reflecting
+    // THIS nomination rather than grabbing whichever LobbyUpdate arrives
+    // first, which can be a stale one still in flight from setup.
+    const lobbyPromise = waitForMatching<any>(stSocket, ServerEvents.LobbyUpdate, (payload) =>
+      payload.players.find((p: any) => p.playerId === players[0]!.playerId)?.hasNominatedToday === true
+    );
     playerSockets[0]!.emit(ClientEvents.PlayerNominate, { targetPlayerId: players[1]!.playerId });
     const lobby = await lobbyPromise;
 

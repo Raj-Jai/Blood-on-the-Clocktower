@@ -3,7 +3,8 @@ import { ClientEvents } from '@clocktower/shared';
 import type { Socket } from 'socket.io-client';
 import type { SessionState } from '../hooks/useSession.js';
 import { GrimoireTable } from '../components/grimoire/GrimoireTable.js';
-import { NightOrderPanel } from '../components/grimoire/NightOrderPanel.js';
+import { LiveNightRoster } from '../components/grimoire/LiveNightRoster.js';
+import { DiscretionPanel } from '../components/grimoire/DiscretionPanel.js';
 import { EvilChatPanel } from '../components/chat/EvilChatPanel.js';
 import { OpenChatPanel } from '../components/chat/OpenChatPanel.js';
 import { ExecutionBanner } from '../components/shared/ExecutionBanner.js';
@@ -88,6 +89,14 @@ export function StorytellerGamePage({ socket, session, code, onLeaveGame }: Stor
 
   function sendOpenChat(text: string) {
     socket?.emit(ClientEvents.ChatOpenSend, { text });
+  }
+
+  function advanceNightStep() {
+    socket?.emit(ClientEvents.StorytellerAdvanceNightStep);
+  }
+
+  function setDiscretionOverride(kind: 'drunk-cover' | 'fortune-teller-red-herring', playerId: string, value: string) {
+    socket?.emit(ClientEvents.StorytellerSetDiscretionOverride, { kind, playerId, value });
   }
 
   function demonKill() {
@@ -269,7 +278,11 @@ export function StorytellerGamePage({ socket, session, code, onLeaveGame }: Stor
         <GrimoireTable grimoire={grimoire} onToggleStatus={toggleStatus} onMarkDead={markDead} />
       </div>
 
-      <NightOrderPanel grimoire={grimoire} isFirstNight={session.dayNumber <= 1 && session.phase === 'night'} />
+      {session.phase === 'night' && (
+        <LiveNightRoster roster={session.nightRoster} grimoire={grimoire} onAdvance={advanceNightStep} />
+      )}
+
+      <DiscretionPanel log={session.discretionLog} grimoire={grimoire} onOverride={setDiscretionOverride} />
 
       {session.nomination && !gameEnded && (
         <div className="panel">

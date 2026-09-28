@@ -5,3 +5,4 @@ export * from './content/onboarding.js';
 export * from './protocol/session.js';
 export * from './protocol/schemas.js';
 export * from './protocol/events.js';
+export * from './protocol/nightAction.js';

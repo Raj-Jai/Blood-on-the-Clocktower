@@ -116,18 +116,28 @@ export function confirmExecution(session: GameSession, nominationId: string): Ex
   const wasDemon = target.characterType === 'demon';
   target.alive = false;
   nomination.executed = true;
+  session.executedTodayCharacterId = target.character;
   // Remove from the qualifying list so a later tie in the same day can't reference a resolved execution twice.
   session.resolvedNominationsToday = session.resolvedNominationsToday.filter((r) => r.targetId !== nomination.targetId);
   return { targetPlayerId: target.playerId, wasDemon };
 }
 
-/** Called when transitioning into the day phase: resets per-day nomination usage, preserves lifetime dead-vote usage. */
+/**
+ * Called when transitioning INTO a new day (i.e. the night that just ended
+ * has already happened): resets per-day nomination usage, preserves
+ * lifetime dead-vote usage, and clears executedTodayCharacterId. Clearing
+ * it here (rather than at the start of the day the execution happened) is
+ * what lets it survive through the intervening night -- exactly when the
+ * Undertaker needs to read it -- before finally being cleared once that
+ * night is over.
+ */
 export function resetForNewDay(session: GameSession): void {
   for (const player of session.players.values()) {
     player.hasNominatedToday = false;
   }
   session.nomination = null;
   session.resolvedNominationsToday = [];
+  session.executedTodayCharacterId = null;
 }
 
 export function toNominationView(session: GameSession, nomination: ActiveNomination): ActiveNominationView {

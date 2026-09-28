@@ -22,6 +22,43 @@ export interface PlayerRecord {
   seatIndex: number;
   /** For Evil players: the one fixed bluff character id assigned at distribution time (stable across reconnects). Null for Good players or before distribution. */
   bluffCharacterId: string | null;
+  /** Fortune Teller only: the one good player who always registers as the Demon to them. Set once (Storyteller discretion, defaulted automatically) and kept stable for the whole game. */
+  fortuneTellerRedHerringId: string | null;
+  /** Drunk only: the Townsfolk character they believe themself to be. Set once at distribution (Storyteller discretion, defaulted automatically). */
+  drunkCoverCharacterId: string | null;
+  /** True for exactly one night/day cycle after a NIGHT death (not an execution) -- gates the Ravenkeeper's conditional wake ("if you die at night"). Cleared at the start of the next night. */
+  diedAtNightPending: boolean;
+}
+
+/** A player's submitted night-action target(s) for the current night, before resolution. */
+export interface NightActionSubmission {
+  characterId: string;
+  targetPlayerIds: string[];
+  submittedAt: number;
+}
+
+/** An auditable record of a hidden-state choice (default or override) for roles the rules require to stay discretionary (Drunk cover, Fortune Teller red herring, Recluse/Spy registration). */
+export interface DiscretionLogEntry {
+  kind: 'drunk-cover' | 'fortune-teller-red-herring' | 'registration-override';
+  playerId: string;
+  /** The chosen value: a character id for drunk-cover, a playerId for red-herring, free text for registration-override. */
+  value: string;
+  /** False for the automatic default assigned at distribution time, true once the Storyteller has overridden it. */
+  isOverride: boolean;
+  at: number;
+}
+
+/** Per-night engine state. Reset at the start of every night phase. */
+export interface NightState {
+  isFirstNight: boolean;
+  /** playerIds in tonight's wake order, already filtered to characters in play and sorted by night order. */
+  wakeOrder: string[];
+  /** Index into wakeOrder of the step currently being acted on. */
+  currentStepIndex: number;
+  /** Submissions recorded so far tonight, keyed by playerId. */
+  submissions: Map<string, NightActionSubmission>;
+  /** Composed result text ready for delivery, keyed by playerId. Delivered via PlayerSelfUpdate/NightInfoResult and then read here for reconnect replay. */
+  results: Map<string, string>;
 }
 
 export interface ActiveNomination {
@@ -64,6 +101,8 @@ export interface GameSession {
   players: Map<string, PlayerRecord>;
   nomination: ActiveNomination | null;
   resolvedNominationsToday: { targetId: string; tally: number }[];
+  /** The true character id of whoever was executed TODAY (not a night kill), for the Undertaker's next-night info. Cleared at the start of each new day. */
+  executedTodayCharacterId: string | null;
   evilChatHistory: ChatMessage[];
   /** Open Discussion: visible to every player and the Storyteller (unlike Evil chat, which is Evil-only). */
   openChatHistory: ChatMessage[];
@@ -73,6 +112,10 @@ export interface GameSession {
   questionQueue: QuestionEntry[];
   /** Set once the game ends (phase becomes 'ended'), by automatic detection or a Storyteller override. */
   gameResult: { winner: WinningTeam; reason: GameEndReason } | null;
+  /** Null outside the night phase. Set fresh each time the Storyteller transitions into night. */
+  nightState: NightState | null;
+  /** Auditable history of discretionary hidden-state choices (defaults and overrides), per the automation research's requirement that these never be invisible. */
+  discretionLog: DiscretionLogEntry[];
   createdAt: number;
   lastActivityAt: number;
 }
@@ -98,11 +141,14 @@ export class SessionStore {
       players: new Map(),
       nomination: null,
       resolvedNominationsToday: [],
+      executedTodayCharacterId: null,
       evilChatHistory: [],
       openChatHistory: [],
       phaseEndsAt: null,
       questionQueue: [],
       gameResult: null,
+      nightState: null,
+      discretionLog: [],
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
     };
@@ -146,6 +192,9 @@ export class SessionStore {
       onboardingSeen: false,
       seatIndex: session.players.size,
       bluffCharacterId: null,
+      fortuneTellerRedHerringId: null,
+      drunkCoverCharacterId: null,
+      diedAtNightPending: false,
     };
     session.players.set(playerId, record);
     return record;

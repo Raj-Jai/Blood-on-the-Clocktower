@@ -18,9 +18,12 @@ import {
   SetPlayerAlignmentSchema,
   SetPlayerStatusSchema,
   SetTimerSchema,
+  SetDiscretionOverrideSchema,
   ShareAbilityResultSchema,
+  SubmitNightActionSchema,
   VoteSchema,
   MIN_PLAYERS,
+  getCharacterById,
   type GameEndReason,
   type QuestionEntryView,
   type WinningTeam,
@@ -28,10 +31,26 @@ import {
 import type { SessionStore, GameSession, PlayerRecord, QuestionEntry } from '../session/store.js';
 import { reorderSeats } from '../session/store.js';
 import { syncEvilRoomMembership, sendEvilHistoryTo, sendEvilMessage, sendOpenHistoryTo, sendOpenMessage } from '../game/chat.js';
-import { distributeRoles, resetDistribution, buildPlayerDistributionPayload } from '../game/distribution.js';
+import {
+  distributeRoles,
+  resetDistribution,
+  buildPlayerDistributionPayload,
+  buildDiscretionLogView,
+  setDiscretionOverride,
+} from '../game/distribution.js';
 import { askQuestion, answerQuestion, resetQuestionQueue } from '../game/questions.js';
 import { resolveDemonKill } from '../game/demonKill.js';
 import { checkWinCondition, endGame, tryScarletWomanTakeover } from '../game/winConditions.js';
+import {
+  advanceNightStep,
+  buildNightRoster,
+  eligibleNightTargets,
+  resolveChef,
+  resolveEmpath,
+  resolveUndertaker,
+  startNight,
+  submitAssistedNightAction,
+} from '../game/nightEngine.js';
 import {
   broadcastGrimoire,
   broadcastLobby,
@@ -101,6 +120,71 @@ function broadcastPhaseChanged(io: SocketIOServer, session: GameSession): void {
     dayNumber: session.dayNumber,
     phaseEndsAt: session.phaseEndsAt,
   });
+}
+
+/** Sends the live night roster to the Storyteller only -- it reveals every waking player's true character, same information-hiding rule as the Grimoire. */
+function broadcastNightRoster(io: SocketIOServer, session: GameSession): void {
+  const roster = buildNightRoster(session);
+  if (roster) {
+    sendToStoryteller(io, session, ServerEvents.NightRosterUpdate, roster);
+  }
+}
+
+/**
+ * Handles the current wake-order step:
+ *  - 'auto'-class characters (Chef, Empath, Undertaker) need no player
+ *    choice at all, so their info is composed and delivered immediately,
+ *    with no prompt shown, the moment their step becomes current.
+ *  - Any character with a nightPrompt (assisted/Imp) gets sent their
+ *    private prompt + target picker and waits for PlayerSubmitNightAction.
+ *  - Everything else (policy/manual roles with no in-app action, e.g.
+ *    Washerwoman, Drunk, Recluse) gets neither -- those stay exactly where
+ *    they always were, resolved by the Storyteller's free-text ability
+ *    result box / discretion panel.
+ */
+function sendCurrentNightPrompt(io: SocketIOServer, session: GameSession): void {
+  const nightState = session.nightState;
+  if (!nightState) return;
+  const currentPlayerId = nightState.wakeOrder[nightState.currentStepIndex];
+  if (!currentPlayerId) return;
+  if (nightState.submissions.has(currentPlayerId) || nightState.results.has(currentPlayerId)) return;
+
+  const player = session.players.get(currentPlayerId);
+  const def = player?.character ? getCharacterById(player.character) : undefined;
+  if (!player || !def) return;
+
+  if (def.automationClass === 'auto') {
+    const resultText = resolveAutoNightInfo(session, player, def.id);
+    if (resultText) {
+      nightState.results.set(player.playerId, resultText);
+      sendToPlayer(io, player, ServerEvents.NightInfoResult, { characterId: def.id, text: resultText });
+      broadcastNightRoster(io, session);
+    }
+    return;
+  }
+
+  if (!def.nightPrompt) return;
+  sendToPlayer(io, player, ServerEvents.NightPrompt, {
+    characterId: def.id,
+    characterName: def.name,
+    prompt: def.nightPrompt,
+    targetCount: def.targetCount ?? 0,
+    eligibleTargetIds: eligibleNightTargets(session, currentPlayerId),
+  });
+}
+
+/** Composes the delivered info text for an 'auto'-class character's step. Returns null for anything not yet wired (there is currently no other auto-class role). */
+function resolveAutoNightInfo(session: GameSession, player: PlayerRecord, characterId: string): string | null {
+  switch (characterId) {
+    case 'chef':
+      return resolveChef(session);
+    case 'empath':
+      return resolveEmpath(session, player.playerId);
+    case 'undertaker':
+      return resolveUndertaker(session, session.executedTodayCharacterId);
+    default:
+      return null;
+  }
 }
 
 function toQuestionView(q: QuestionEntry): QuestionEntryView {
@@ -212,6 +296,11 @@ function broadcastDistribution(io: SocketIOServer, session: GameSession): void {
   syncEvilRoomMembership(io, session);
 }
 
+/** Storyteller-only: the auditable log of discretionary hidden-state defaults/overrides (Drunk cover, Fortune Teller red herring). */
+function broadcastDiscretionLog(io: SocketIOServer, session: GameSession): void {
+  sendToStoryteller(io, session, ServerEvents.DiscretionLogUpdate, { entries: buildDiscretionLogView(session) });
+}
+
 export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore): void {
   io.on('connection', (socket) => {
     // Lightweight keep-alive: no auth required, just touches the session
@@ -232,6 +321,8 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         if (identity.isStoryteller) {
           io.to(identity.session.code).emit(ServerEvents.StorytellerConnectionStatus, { connected: true });
           broadcastGrimoire(io, identity.session);
+          broadcastDiscretionLog(io, identity.session);
+          broadcastNightRoster(io, identity.session);
         } else if (identity.player) {
           if (identity.player.alignment === 'evil') {
             syncEvilRoomMembership(io, identity.session);
@@ -274,6 +365,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         session.dayNumber = 1;
         session.phaseEndsAt = null;
         broadcastDistribution(io, session);
+        broadcastDiscretionLog(io, session);
         broadcastPhaseChanged(io, session);
         store.touch(session);
       })
@@ -286,6 +378,7 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         resetDistribution(session);
         distributeRoles(session);
         broadcastDistribution(io, session);
+        broadcastDiscretionLog(io, session);
         store.touch(session);
       })
     );
@@ -304,6 +397,11 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
             resetForNewDay(session);
             resetQuestionQueue(session);
             session.dayNumber += 1;
+            session.nightState = null;
+          } else {
+            // Entering night: the game always starts on Day 1, so the first
+            // night reached is the one where dayNumber is still 1.
+            startNight(session, session.dayNumber === 1);
           }
           session.phase = phase;
         }
@@ -311,6 +409,8 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         broadcastPhaseChanged(io, session);
         broadcastGrimoire(io, session);
         sendQuestionQueueUpdates(io, session);
+        broadcastNightRoster(io, session);
+        if (session.phase === 'night') sendCurrentNightPrompt(io, session);
         store.touch(session);
       })
     );
@@ -377,6 +477,25 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         broadcastGrimoire(io, session);
         const payload = player.character ? buildPlayerDistributionPayload(session, player) : null;
         if (payload) sendToPlayer(io, player, ServerEvents.GameDistributed, payload);
+        store.touch(session);
+      })
+    );
+
+    socket.on(ClientEvents.StorytellerSetDiscretionOverride, (raw: unknown) =>
+      guarded(io, socket, () => {
+        const session = requireStoryteller(socket);
+        const { kind, playerId, value } = SetDiscretionOverrideSchema.parse(raw);
+        setDiscretionOverride(session, kind, playerId, value);
+        broadcastDiscretionLog(io, session);
+        if (kind === 'drunk-cover') {
+          // The cover character name/ability is what the Drunk's own client
+          // displays -- resend their distribution payload so it reflects
+          // the new cover immediately, same as any other character change.
+          const drunkPlayer = session.players.get(playerId);
+          if (drunkPlayer?.character) {
+            sendToPlayer(io, drunkPlayer, ServerEvents.GameDistributed, buildPlayerDistributionPayload(session, drunkPlayer));
+          }
+        }
         store.touch(session);
       })
     );
@@ -452,6 +571,12 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const killResult = resolveDemonKill(session, demon.playerId, killTargetId);
         broadcastGrimoire(io, session);
         broadcastLobby(io, session);
+        if (!killResult.died) {
+          // Monk protection or Soldier immunity blocked the kill entirely --
+          // nothing died, so there's nothing further to broadcast.
+          store.touch(session);
+          return;
+        }
         sendToPlayer(io, session.players.get(killResult.targetPlayerId)!, ServerEvents.PlayerSelfUpdate, {
           alive: false,
         });
@@ -519,6 +644,56 @@ export function registerGatewayHandlers(io: SocketIOServer, store: SessionStore)
         const { text } = AskQuestionSchema.parse(raw);
         askQuestion(session, player.playerId, text);
         sendQuestionQueueUpdates(io, session);
+        store.touch(session);
+      })
+    );
+
+    socket.on(ClientEvents.PlayerSubmitNightAction, (raw: unknown) =>
+      guarded(io, socket, () => {
+        const { session, player } = requirePlayer(socket);
+        if (session.phase !== 'night' || !session.nightState) throw Errors.notNightPhase();
+        const nightState = session.nightState;
+        const currentPlayerId = nightState.wakeOrder[nightState.currentStepIndex];
+        if (currentPlayerId !== player.playerId) throw Errors.notYourNightAction();
+        if (nightState.submissions.has(player.playerId) || nightState.results.has(player.playerId)) {
+          throw Errors.nightActionAlreadySubmitted();
+        }
+
+        const { targetPlayerIds } = SubmitNightActionSchema.parse(raw);
+        const def = player.character ? getCharacterById(player.character) : undefined;
+        if (!def) throw Errors.playerNotFound();
+
+        nightState.submissions.set(player.playerId, {
+          characterId: def.id,
+          targetPlayerIds,
+          submittedAt: Date.now(),
+        });
+
+        // The Imp's kill has its own dedicated event/handler (StorytellerDemonKill)
+        // with its own broadcast/win-check/inheritance side effects, so a
+        // submission here just records intent for the Storyteller's roster;
+        // it does not resolve the kill itself.
+        if (def.automationClass === 'assisted' && def.id !== 'imp') {
+          const result = submitAssistedNightAction(session, player.playerId, targetPlayerIds);
+          if (result.resultText) {
+            nightState.results.set(player.playerId, result.resultText);
+            sendToPlayer(io, player, ServerEvents.NightInfoResult, { characterId: def.id, text: result.resultText });
+          }
+          broadcastGrimoire(io, session);
+        }
+
+        broadcastNightRoster(io, session);
+        store.touch(session);
+      })
+    );
+
+    socket.on(ClientEvents.StorytellerAdvanceNightStep, () =>
+      guarded(io, socket, () => {
+        const session = requireStoryteller(socket);
+        if (session.phase !== 'night' || !session.nightState) throw Errors.notNightPhase();
+        advanceNightStep(session);
+        broadcastNightRoster(io, session);
+        sendCurrentNightPrompt(io, session);
         store.touch(session);
       })
     );

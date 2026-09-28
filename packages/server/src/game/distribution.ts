@@ -44,10 +44,30 @@ export function distributeRoles(session: GameSession): void {
   }
 
   const counts = getDistributionCounts(n);
+
+  // Minions are selected FIRST: the Baron's setup modifier ("[+2 Outsiders]")
+  // only applies when the Baron happens to be among the selected Minions,
+  // so whether it applies can't be known until after this draw.
+  const selectedMinions = sampleCharacters('minion', counts.minion);
+  const hasBaron = selectedMinions.some((c) => c.id === 'baron');
+
+  let townsfolkCount = counts.townsfolk;
+  let outsiderCount = counts.outsider;
+  if (hasBaron) {
+    // Capped at the actual size of each pool: at most 2 more Outsiders than
+    // the table calls for, and never more Townsfolk removed than the table
+    // has to give (both are non-issues at every real Trouble Brewing player
+    // count, but this keeps sampleCharacters from ever being asked for more
+    // than exists).
+    const bump = Math.min(2, townsfolkCount, charactersByType('outsider').length - outsiderCount);
+    townsfolkCount -= bump;
+    outsiderCount += bump;
+  }
+
   const selected: CharacterDefinition[] = [
-    ...sampleCharacters('townsfolk', counts.townsfolk),
-    ...sampleCharacters('outsider', counts.outsider),
-    ...sampleCharacters('minion', counts.minion),
+    ...sampleCharacters('townsfolk', townsfolkCount),
+    ...sampleCharacters('outsider', outsiderCount),
+    ...selectedMinions,
     ...sampleCharacters('demon', counts.demon),
   ];
 
@@ -65,6 +85,114 @@ export function distributeRoles(session: GameSession): void {
   });
 
   assignBluffs(session);
+  assignDrunkCover(session);
+  assignFortuneTellerRedHerring(session);
+}
+
+/**
+ * Gives the Drunk a default cover character so they can be shown a real
+ * character name/ability instead of the literal string "Drunk". Prefers a
+ * Townsfolk not otherwise in play or already used as a bluff, but that's
+ * just a nicer default -- the real game has no problem with the Drunk's
+ * fake claim coinciding with a character someone else is genuinely
+ * playing, so at high player counts (few/no unused Townsfolk left) this
+ * correctly falls back to reusing one. This is a discretionary DEFAULT,
+ * not a fixed rule; it's logged and overridable via setDiscretionOverride.
+ */
+function assignDrunkCover(session: GameSession): void {
+  const drunkPlayer = [...session.players.values()].find((p) => p.character === 'drunk');
+  if (!drunkPlayer) return;
+
+  const inPlayIds = new Set(
+    [...session.players.values()].map((p) => p.character).filter((c): c is string => c !== null)
+  );
+  const bluffIds = new Set(
+    [...session.players.values()].map((p) => p.bluffCharacterId).filter((c): c is string => c !== null)
+  );
+  const candidates = TROUBLE_BREWING_CHARACTERS.filter(
+    (c) => c.type === 'townsfolk' && !inPlayIds.has(c.id) && !bluffIds.has(c.id)
+  );
+  const cover = shuffle(candidates)[0] ?? shuffle(TROUBLE_BREWING_CHARACTERS.filter((c) => c.type === 'townsfolk'))[0];
+  if (!cover) return;
+
+  drunkPlayer.drunkCoverCharacterId = cover.id;
+  session.discretionLog.push({
+    kind: 'drunk-cover',
+    playerId: drunkPlayer.playerId,
+    value: cover.id,
+    isOverride: false,
+    at: Date.now(),
+  });
+}
+
+/**
+ * Gives the Fortune Teller a default red herring: one good, non-Fortune-
+ * Teller player who will always register as the Demon to them. Per the
+ * wiki's own advice this should stay consistent for the whole game once
+ * set, which is why it's assigned once here rather than recomputed live.
+ */
+function assignFortuneTellerRedHerring(session: GameSession): void {
+  const fortuneTeller = [...session.players.values()].find((p) => p.character === 'fortune-teller');
+  if (!fortuneTeller) return;
+
+  const candidates = [...session.players.values()].filter(
+    (p) => p.playerId !== fortuneTeller.playerId && p.alignment === 'good'
+  );
+  const herring = shuffle(candidates)[0];
+  if (!herring) return;
+
+  fortuneTeller.fortuneTellerRedHerringId = herring.playerId;
+  session.discretionLog.push({
+    kind: 'fortune-teller-red-herring',
+    playerId: fortuneTeller.playerId,
+    value: herring.playerId,
+    isOverride: false,
+    at: Date.now(),
+  });
+}
+
+/**
+ * Lets the Storyteller override a previously-assigned discretionary
+ * default. Always appends a new, timestamped, isOverride:true entry to the
+ * log rather than mutating history, so every choice remains auditable.
+ */
+/** Resolves the raw discretionLog into Storyteller-facing display labels (character/player names instead of bare ids). */
+export function buildDiscretionLogView(session: GameSession) {
+  return session.discretionLog.map((entry) => {
+    const player = session.players.get(entry.playerId);
+    let valueLabel: string;
+    if (entry.kind === 'fortune-teller-red-herring') {
+      valueLabel = session.players.get(entry.value)?.displayName ?? 'Unknown';
+    } else {
+      valueLabel = getCharacterById(entry.value)?.name ?? entry.value;
+    }
+    return {
+      kind: entry.kind,
+      playerId: entry.playerId,
+      playerDisplayName: player?.displayName ?? 'Unknown',
+      valueLabel,
+      isOverride: entry.isOverride,
+      at: entry.at,
+    };
+  });
+}
+
+export function setDiscretionOverride(
+  session: GameSession,
+  kind: 'drunk-cover' | 'fortune-teller-red-herring',
+  playerId: string,
+  value: string
+): void {
+  const player = session.players.get(playerId);
+  if (!player) throw Errors.playerNotFound();
+
+  if (kind === 'drunk-cover') {
+    player.drunkCoverCharacterId = value;
+  } else {
+    player.fortuneTellerRedHerringId = value;
+  }
+
+  session.discretionLog.push({ kind, playerId, value, isOverride: true, at: Date.now() });
 }
 
 /**
@@ -99,7 +227,11 @@ export function resetDistribution(session: GameSession): void {
     player.statusEffects = { poisoned: false, drunk: false, protected: false };
     player.hasNominatedToday = false;
     player.bluffCharacterId = null;
+    player.fortuneTellerRedHerringId = null;
+    player.drunkCoverCharacterId = null;
+    player.diedAtNightPending = false;
   }
+  session.discretionLog = [];
 }
 
 function evilTeammatesOf(session: GameSession, selfId: string) {
@@ -119,14 +251,22 @@ export function buildPlayerDistributionPayload(session: GameSession, player: Pla
   if (!def || !player.characterType || !player.alignment) {
     throw new Error(`Player ${player.playerId} has no character assigned yet`);
   }
+  // The Drunk must not know they're the Drunk -- show them their assigned
+  // cover character's name/ability instead of the literal string "Drunk"
+  // (their characterType/alignment/id stay the true Outsider/good values
+  // for every OTHER purpose -- Chef/Empath counts, win conditions, etc.
+  // are computed off the real character, never the cover).
+  const coverDef =
+    def.id === 'drunk' && player.drunkCoverCharacterId ? getCharacterById(player.drunkCoverCharacterId) : undefined;
+  const displayDef = coverDef ?? def;
   const base = {
     role: 'player' as const,
     playerId: player.playerId,
     character: def.id,
-    characterName: def.name,
+    characterName: displayDef.name,
     characterType: player.characterType,
     alignment: player.alignment,
-    ability: def.ability,
+    ability: displayDef.ability,
   };
   if (player.alignment === 'evil') {
     const bluffDef = player.bluffCharacterId ? getCharacterById(player.bluffCharacterId) : undefined;

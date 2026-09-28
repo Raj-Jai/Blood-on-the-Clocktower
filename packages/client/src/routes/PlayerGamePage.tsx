@@ -17,6 +17,8 @@ import { PhaseTimer } from '../components/shared/PhaseTimer.js';
 import { QuestionQueuePanel } from '../components/questions/QuestionQueuePanel.js';
 import { RoleReferenceSection } from '../components/reference/RoleReferenceSection.js';
 import { RoomCodeChip } from '../components/shared/RoomCodeChip.js';
+import { NightActionPrompt } from '../components/character/NightActionPrompt.js';
+import { SpyGrimoirePanel } from '../components/character/SpyGrimoirePanel.js';
 import type { LobbyPlayer } from '../hooks/useSession.js';
 
 function SeatingCirclePanel({ players, selfPlayerId }: { players: LobbyPlayer[]; selfPlayerId: string }) {
@@ -79,6 +81,10 @@ export function PlayerGamePage({ socket, session, selfPlayerId, code, onLeaveGam
 
   function askQuestion(text: string) {
     socket?.emit(ClientEvents.PlayerAskQuestion, { text });
+  }
+
+  function submitNightAction(targetPlayerIds: string[]) {
+    socket?.emit(ClientEvents.PlayerSubmitNightAction, { targetPlayerIds });
   }
 
   const executedName = session.lastExecutedPlayerId
@@ -184,6 +190,13 @@ export function PlayerGamePage({ socket, session, selfPlayerId, code, onLeaveGam
               </p>
             </div>
           )}
+          {session.nightInfoResult && (
+            <div className="panel">
+              <h3 style={{ marginTop: 0 }}>Your Night Information</h3>
+              <p>{session.nightInfoResult.text}</p>
+            </div>
+          )}
+          {distribution.character === 'spy' && session.grimoire && <SpyGrimoirePanel grimoire={session.grimoire} />}
         </div>
       )}
 
@@ -286,6 +299,15 @@ export function PlayerGamePage({ socket, session, selfPlayerId, code, onLeaveGam
       )}
 
       {showRoles && <RoleReferenceSection onClose={() => setShowRoles(false)} />}
+
+      {session.nightPrompt && (
+        <NightActionPrompt
+          prompt={session.nightPrompt}
+          players={session.lobbyPlayers}
+          selfPlayerId={selfPlayerId}
+          onSubmit={submitNightAction}
+        />
+      )}
     </div>
   );
 }
